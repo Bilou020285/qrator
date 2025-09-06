@@ -1,0 +1,438 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>QRatorDialog</class>
+ <widget class="QDialog" name="QRatorDialog">
+  <property name="windowTitle">
+   <string>QRator - Analyse de projet QGIS</string>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>900</width>
+    <height>700</height>
+   </size>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <!-- Ajout de l'en-tête avec logo -->
+   <item>
+    <layout class="QHBoxLayout" name="headerLayout">
+     <item>
+      <widget class="QLabel" name="logoLabel">
+       <property name="text">
+        <string/>
+       </property>
+       <property name="pixmap">
+        <pixmap>icons/icon_full.png</pixmap>  <!-- Chemin relatif -->
+       </property>
+       <property name="scaledContents">
+        <bool>false</bool>
+       </property>
+       <property name="maximumHeight">
+        <number>60</number>
+       </property>
+       <property name="minimumHeight">
+        <number>60</number>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="titleLabel">
+       <property name="text">
+        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p align=&quot;center&quot;&gt;&lt;span style=&quot; font-size:14pt; font-weight:600;&quot;&gt;QRator&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer>
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item> 
+   <item>
+    <widget class="QTabWidget" name="tabWidget">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <!-- Onglet Projet -->
+     <widget class="QWidget" name="tabProject">
+      <attribute name="title">
+       <string>Projet</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="projectLayout">
+       <item>
+        <widget class="QPushButton" name="loadProjectButton">
+         <property name="text">
+          <string>Ouvrir un projet QGIS (.qgz)</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLineEdit" name="projectPathLineEdit">
+         <property name="placeholderText">
+          <string>Chemin du projet à analyser...</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- Onglet Couches -->
+     <widget class="QWidget" name="tabLayers">
+      <attribute name="title">
+       <string>Couches</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="layersLayout">
+       <!-- Boutons de sélection -->
+       <item>
+        <layout class="QHBoxLayout" name="layerSelectionButtons">
+         <item>
+          <widget class="QPushButton" name="selectAllLayersButton">
+           <property name="text">
+            <string>Tout sélectionner</string>
+           </property>
+           <property name="toolTip">
+            <string>Sélectionner toutes les couches et groupes</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="deselectAllLayersButton">
+           <property name="text">
+            <string>Tout désélectionner</string>
+           </property>
+           <property name="toolTip">
+            <string>Désélectionner toutes les couches et groupes</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="invertLayerSelectionButton">
+           <property name="text">
+            <string>Inverser la sélection</string>
+           </property>
+           <property name="toolTip">
+            <string>Inverser la sélection des couches et groupes</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <stretch/>
+         </item>
+        </layout>
+       </item>
+
+       <!-- Arbre des couches -->
+       <item>
+        <widget class="QTreeWidget" name="layerTree">
+         <property name="headerLabel">
+          <string>Arborescence des couches</string>
+         </property>
+         <property name="rootIsDecorated">
+          <bool>true</bool>
+         </property>
+         <property name="itemsExpandable">
+          <bool>true</bool>
+         </property>
+         <property name="expandsOnDoubleClick">
+          <bool>true</bool>
+         </property>
+         <property name="alternatingRowColors">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- Onglet Thèmes -->
+     <widget class="QWidget" name="tabThemes">
+      <attribute name="title">
+       <string>Thèmes</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="themesLayout">
+       <!-- Boutons de sélection -->
+       <item>
+        <layout class="QHBoxLayout" name="themeSelectionButtons">
+         <item>
+          <widget class="QPushButton" name="selectAllThemesButton">
+           <property name="text">
+            <string>Tout sélectionner</string>
+           </property>
+           <property name="toolTip">
+            <string>Sélectionner tous les thèmes</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="deselectAllThemesButton">
+           <property name="text">
+            <string>Tout désélectionner</string>
+           </property>
+           <property name="toolTip">
+            <string>Désélectionner tous les thèmes</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="invertThemeSelectionButton">
+           <property name="text">
+            <string>Inverser la sélection</string>
+           </property>
+           <property name="toolTip">
+            <string>Inverser la sélection des thèmes</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <stretch/>
+         </item>
+        </layout>
+       </item>
+
+       <!-- Arbre des thèmes -->
+       <item>
+        <widget class="QTreeWidget" name="themeTree">
+         <property name="headerLabel">
+          <string>Thèmes et couches associées</string>
+         </property>
+         <property name="rootIsDecorated">
+          <bool>true</bool>
+         </property>
+         <property name="itemsExpandable">
+          <bool>true</bool>
+         </property>
+         <property name="alternatingRowColors">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- Onglet Mises en page -->
+     <widget class="QWidget" name="tabLayouts">
+      <attribute name="title">
+       <string>Mises en page</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="layoutsLayout">
+       <!-- Boutons de sélection -->
+       <item>
+        <layout class="QHBoxLayout" name="layoutSelectionButtons">
+         <item>
+          <widget class="QPushButton" name="selectAllLayoutsButton">
+           <property name="text">
+            <string>Tout sélectionner</string>
+           </property>
+           <property name="toolTip">
+            <string>Sélectionner toutes les mises en page</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="deselectAllLayoutsButton">
+           <property name="text">
+            <string>Tout désélectionner</string>
+           </property>
+           <property name="toolTip">
+            <string>Désélectionner toutes les mises en page</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="invertLayoutSelectionButton">
+           <property name="text">
+            <string>Inverser la sélection</string>
+           </property>
+           <property name="toolTip">
+            <string>Inverser la sélection des mises en page</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <stretch/>
+         </item>
+        </layout>
+       </item>
+
+       <!-- Arbre des mises en page -->
+       <item>
+        <widget class="QTreeWidget" name="layoutTree">
+         <property name="headerLabel">
+          <string>Mises en page</string>
+         </property>
+         <property name="rootIsDecorated">
+          <bool>true</bool>
+         </property>
+         <property name="alternatingRowColors">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- Onglet Relations -->
+     <widget class="QWidget" name="tabRelations">
+      <attribute name="title">
+       <string>Relations</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="relationsLayout">
+       <!-- Boutons de sélection -->
+       <item>
+        <layout class="QHBoxLayout" name="relationSelectionButtons">
+         <item>
+          <widget class="QPushButton" name="selectAllRelationsButton">
+           <property name="text">
+            <string>Tout sélectionner</string>
+           </property>
+           <property name="toolTip">
+            <string>Sélectionner toutes les relations</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="deselectAllRelationsButton">
+           <property name="text">
+            <string>Tout désélectionner</string>
+           </property>
+           <property name="toolTip">
+            <string>Désélectionner toutes les relations</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="invertRelationSelectionButton">
+           <property name="text">
+            <string>Inverser la sélection</string>
+           </property>
+           <property name="toolTip">
+            <string>Inverser la sélection des relations</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <stretch/>
+         </item>
+        </layout>
+       </item>
+
+       <!-- Arbre des relations -->
+       <item>
+        <widget class="QTreeWidget" name="relationTree">
+         <property name="headerLabel">
+          <string>Relations</string>
+         </property>
+         <column>
+          <property name="text">
+           <string>Relations</string>
+          </property>
+         </column>
+         <property name="rootIsDecorated">
+          <bool>true</bool>
+         </property>
+         <property name="itemsExpandable">
+          <bool>true</bool>
+         </property>
+         <property name="alternatingRowColors">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+
+   <!-- Résultats -->
+   <item>
+    <widget class="QTextEdit" name="resultTextEdit">
+     <property name="placeholderText">
+      <string>Résultats de l'analyse...</string>
+     </property>
+     <property name="readOnly">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+
+   <!-- Champ de chemin de sortie -->
+   <item>
+    <layout class="QHBoxLayout" name="outputLayout">
+     <item>
+      <widget class="QLineEdit" name="modifiedPathLineEdit">
+       <property name="placeholderText">
+        <string>Chemin du projet modifié (.qgz)...</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="browseOutputButton">
+       <property name="text">
+        <string>...</string>
+       </property>
+       <property name="toolTip">
+        <string>Parcourir pour sélectionner un chemin de sortie</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+
+   <!-- Boutons principaux -->
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item>
+      <widget class="QPushButton" name="refreshButton">
+       <property name="text">
+        <string>Rafraîchir</string>
+       </property>
+       <property name="toolTip">
+        <string>Rafraîchir l'analyse du projet</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="exportButton">
+       <property name="text">
+        <string>Exporter en HTML</string>
+       </property>
+       <property name="toolTip">
+        <string>Générer un rapport HTML du projet</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="saveProjectButton">
+       <property name="text">
+        <string>Enregistrer le projet modifié</string>
+       </property>
+       <property name="toolTip">
+        <string>Enregistrer le projet filtré</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="closeButton">
+       <property name="text">
+        <string>Fermer</string>
+       </property>
+       <property name="toolTip">
+        <string>Fermer la fenêtre</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
