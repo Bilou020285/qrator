@@ -11,10 +11,10 @@ about=Ce plugin permet d'accéder au contenu d'un projet QGIS sans l'ouvrir. Il 
 tracker=https://github.com/Bilou020285/qrator/issues
 repository=https://github.com/Bilou020285/qrator
 
-# changelog=Version :
+changelog=Version : Le projet _DEBUG.qgs n'est plus automatiquement créé. Ajout d'une case à cocher pour déconnecter les données locales du pijet et les ré-adresser à l'ouverture via la fenêtre de sources manquantes de QGIS. The _DEBUG.qgs project is no longer created automatically. Added a checkbox to disconnect local data from the pijet and re-address it at startup via the QGIS missing sources window.
 
 tags=python, QGIS, plugin, project management, project analysis, layers, styles, themes, layouts, relations, HTML report, filtered project, subproject, GIS
-version=1.0
+version=1.1
 license=GPL-2.0-or-later
 
 homepage=https://github.com/Bilou020285/qrator

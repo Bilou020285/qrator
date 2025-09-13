@@ -13,13 +13,50 @@ import os
 import datetime
 from qgis.core import QgsApplication, QgsProject, QgsLayoutExporter
 from qgis.PyQt.QtGui import QPixmap, QGuiApplication, QIcon  # Ajoutez QPixmap à vos imports existants
-from qgis.PyQt.QtWidgets import QMenu, QAction
+from qgis.PyQt.QtWidgets import QMenu, QAction, QCheckBox
 import tempfile
+
 
 class QRatorDialog(QDialog, Ui_QRatorDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setupUi(self)
+
+        # === QRator: Checkbox "Déconnecter les sources locales" ===
+        def _init_disconnect_checkbox(self):
+            """Crée et insère la case juste au-dessus de la ligne 'Chemin du projet modifié (.qgz)...'."""
+            self.chk_disconnect_local = QCheckBox("Déconnecter les sources de données locales", self)
+            self.chk_disconnect_local.setToolTip(
+                "Si coché : les couches locales (SHP, GPKG/SpatiaLite, CSV, rasters, etc.) "
+                "seront volontairement 'cassées' dans le projet généré pour que QGIS propose "
+                "de les réadresser à l'ouverture. Les couches distantes (PostGIS, WMS/WFS/WMTS, "
+                "XYZ, ArcGIS, vectortiles, etc.) sont conservées."
+            )
+
+            # État par défaut : toujours décoché
+            self.chk_disconnect_local.setChecked(False)
+
+            # Insertion juste avant outputLayout dans mainLayout
+            try:
+                main = getattr(self, "mainLayout", None)
+                out_lay = getattr(self, "outputLayout", None)
+                if main is not None and out_lay is not None:
+                    insert_idx = main.count()
+                    for i in range(main.count()):
+                        item = main.itemAt(i)
+                        if item is not None and item.layout() is out_lay:
+                            insert_idx = i
+                            break
+                    main.insertWidget(insert_idx, self.chk_disconnect_local)
+                else:
+                    self.mainLayout.addWidget(self.chk_disconnect_local)
+            except Exception:
+                self.mainLayout.addWidget(self.chk_disconnect_local)
+
+        # Appel d'init
+        self._init_disconnect_checkbox = _init_disconnect_checkbox.__get__(self, self.__class__)
+        self._init_disconnect_checkbox()
+        # === /QRator: Checkbox ===
 
         # Couches (déjà présent chez toi)
         if hasattr(self, 'layerTree') and hasattr(self.layerTree.header(), 'setSectionResizeMode'):
@@ -842,7 +879,17 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             print("[QRator] selections:", self.selection_manager.get_selected_elements())
             print("[QRator] will save to:", output_path)
 
+            # Passer l’état de la case à cocher au moteur d’export
+            try:
+                selected_elements["disconnect_local"] = bool(
+                    getattr(self, "chk_disconnect_local", None)
+                    and self.chk_disconnect_local.isChecked()
+                )
+            except Exception:
+                selected_elements["disconnect_local"] = False
+
             success = save_new_project(output_path, xml_root, selected_elements)
+
             if success:
                 self.update_status(f"Project saved to {output_path}")
                 QMessageBox.information(self, "Success", f"Project saved successfully: {output_path}")
@@ -1508,6 +1555,14 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             self._clear_ui_and_state()
         finally:
             super().closeEvent(event)
+
+    def showEvent(self, event):
+        """À chaque affichage de la fenêtre, on remet la case à décoché."""
+        try:
+            if hasattr(self, "chk_disconnect_local"):
+                self.chk_disconnect_local.setChecked(False)
+        finally:
+            super().showEvent(event)
 
     def reject(self):
         """Si on ferme via Échap / bouton Annuler."""

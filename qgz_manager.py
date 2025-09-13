@@ -3,6 +3,7 @@ import os
 import tempfile
 import zipfile
 import copy
+import re
 from typing import Dict, Set, DefaultDict, Tuple, Iterable
 from collections import defaultdict
 from lxml import etree
@@ -431,23 +432,85 @@ def _filter_relations(xml_root: etree._Element,
 # =========================
 # Sauvegarde
 # =========================
+# === QRator: déconnexion des sources locales dans le XML ===
+def _is_remote_provider(provider: str, datasource: str) -> bool:
+    p = (provider or "").lower()
+    ds = (datasource or "")
+
+    remote_providers = {
+        "postgres", "wfs", "wms", "wmts", "xyz",
+        "arcgismapserver", "arcgisfeatureserver", "ows",
+        "mssql", "oracle", "vectortile", "memory", "virtual"
+    }
+    if p in remote_providers:
+        return True
+
+    # Datasource http(s)/ftp ⇒ distant
+    if re.search(r"(?i)^(https?|ftp)://", ds):
+        return True
+    if re.search(r"(?i)(^|[?&])url=(https?|ftp)://", ds):
+        return True
+
+    return False
+
+
+def _should_disconnect_local_provider(provider: str, datasource: str) -> bool:
+    if _is_remote_provider(provider, datasource):
+        return False
+    # Providers typiquement locaux
+    localish = {"ogr", "gdal", "delimitedtext", "spatialite", "gpx", "mdal"}
+    return (provider or "").lower() in localish
+
+
+def _make_invalid_datasource(provider: str) -> str:
+    import os as _os
+    invalid_path = r"C:\__qrator_missing__\missing.xxx" if _os.name == "nt" else "/__qrator_missing__/missing.xxx"
+    p = (provider or "").lower()
+    if p == "delimitedtext":
+        return f"file://{invalid_path}?encoding=UTF-8"
+    return invalid_path
+
+
+def disconnect_local_layers_in_xml(xml_root: etree._Element):
+    """
+    Parcourt toutes les <maplayer> et remplace <datasource> par un chemin invalide
+    pour forcer le réadressage des couches locales à la réouverture du projet.
+    """
+    for ml in _all(xml_root, ".//*[local-name()='maplayer']"):
+        prov_node = ml.find("provider")
+        provider = prov_node.text.strip() if prov_node is not None and prov_node.text else ""
+
+        ds_node = ml.find("datasource")
+        datasource = ds_node.text if ds_node is not None and ds_node.text else ""
+
+        if not _should_disconnect_local_provider(provider, datasource):
+            continue
+
+        invalid_ds = _make_invalid_datasource(provider)
+        if ds_node is None:
+            ds_node = etree.SubElement(ml, "datasource")
+        ds_node.text = invalid_ds
+
+        try:
+            ml.addprevious(etree.Comment("QRator: datasource intentionally broken to force relinking"))
+        except Exception:
+            pass
+# === /QRator: déconnexion ===
 
 def save_new_project(output_path: str, xml_root: etree._Element, selected: Dict) -> bool:
     """
     Écrit un .qgz filtré selon selected.
-    Écrit aussi un fichier *_DEBUG.qgs pour inspection manuelle.
+    (DEBUG .qgs désactivé)
     """
     try:
         filtered = filter_project_xml(xml_root, selected)
 
-        # DEBUG : écrire le XML filtré à côté
+        # Déconnecter les sources locales si demandé par l’UI
         try:
-            dbg = os.path.splitext(output_path)[0] + "_DEBUG.qgs"
-            with open(dbg, "wb") as f:
-                f.write(etree.tostring(filtered, pretty_print=True, encoding="utf-8"))
-            print(f"[QRator] DEBUG written: {dbg}")
+            if selected.get("disconnect_local", False):
+                disconnect_local_layers_in_xml(filtered)
         except Exception:
-            pass
+            pass  # on n'empêche pas la sauvegarde pour autant
 
         # Emballer dans un .qgz
         with tempfile.NamedTemporaryFile(suffix=".qgs", delete=False) as tmp:

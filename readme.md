@@ -1,4 +1,5 @@
 # QRator -- Guide Utilisateur
+> Version 1.1
 
 ## Présentation
 
@@ -125,6 +126,11 @@ sélection).
     -   les autres sont supprimées du XML.
 -   Idéal pour partager un **sous-projet** à un collègue ou pour alléger
     un projet complexe.
+
+### 3. Déconnection aux données locales
+
+La case à cocher **Déconnecter les sources de données locales** permet de générer un nouveau projet avec des sources différentes du projet d'origine.
+À l'ouverture du projet créé par QRator, QGIS signalera les sources de données manquantes qu'il suffira alors de réadresser.
 
 ------------------------------------------------------------------------
 
@@ -266,6 +272,11 @@ The main window contains several parts:
     -   all other elements are removed from the XML.
 -   Perfect for sharing a **subproject** with colleagues or lightening
     complex projects.
+
+### 3. Disconnecting local data
+
+The **Disconnect local data sources** checkbox allows you to generate a new project with different sources from the original project.
+When you open the project created by QRator, QGIS will flag any missing data sources, which you can then simply re-address.    
 
 ------------------------------------------------------------------------
 
