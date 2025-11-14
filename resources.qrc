@@ -1,6 +1,0 @@
-<!DOCTYPE RCC>
-<RCC>
-  <qresource prefix="/plugins/qrator">
-    <file>icons/icon.png</file>
-  </qresource>
-</RCC>
