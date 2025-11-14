@@ -89,6 +89,7 @@ les sélections globales.
 🔧 **Menus contextuels** (clic droit) :
 - Exporter une mise en page sélectionnée en **PDF** ou **PNG (300
 dpi)**,
+- Exporter une mise en page sélectionnée sous la forme d'un modèle de mise en page **QPT**
 - Exporter plusieurs mises en page cochées en lot.
 
 ------------------------------------------------------------------------
@@ -237,6 +238,7 @@ The main window contains several parts:
 
 🔧 **Context menu** (right-click):
 - Export a selected layout as **PDF** or **PNG (300 dpi)**,
+- Export a selected layout as QGIS layout template **QPT**,
 - Export multiple checked layouts in batch.
 
 ------------------------------------------------------------------------

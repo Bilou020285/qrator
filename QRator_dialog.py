@@ -11,7 +11,7 @@ from .parse_layouts_relations import parse_layouts_relations
 from .html_report_generator import HTMLReportGenerator  # Nouveau module
 import os
 import datetime
-from qgis.core import QgsApplication, QgsProject, QgsLayoutExporter
+from qgis.core import QgsApplication, QgsProject, QgsLayoutExporter, QgsReadWriteContext
 from qgis.PyQt.QtGui import QPixmap, QGuiApplication, QIcon  # Ajoutez QPixmap à vos imports existants
 from qgis.PyQt.QtWidgets import QMenu, QAction, QCheckBox
 import tempfile
@@ -1288,7 +1288,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             QMessageBox.critical(self, "QRator", f"Erreur: {e}")
 
     def _on_layouts_context_menu(self, pos: QPoint):
-        """Menu contextuel sur layoutTree : export PDF/PNG (300 dpi), individuel ou en lot (éléments cochés)."""
+        """Menu contextuel sur layoutTree : export PDF/PNG (300 dpi), QPT pour la mise en page cliquée,
+        et export en lot (PDF/PNG) pour les mises en page cochées."""
         sender = self.sender()
         if sender is None:
             return
@@ -1309,18 +1310,26 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
 
         # Actions "sur la mise en page cliquée"
         if clicked_is_layout and clicked_name:
+            # Export PDF
             a1 = QAction(f"Exporter « {clicked_name} » en PDF…", menu)
             a1.triggered.connect(lambda: self._export_single_layout(clicked_name, "pdf"))
             menu.addAction(a1)
 
+            # Export PNG (300 dpi)
             a2 = QAction(f"Exporter « {clicked_name} » en PNG (300 dpi)…", menu)
             a2.triggered.connect(lambda: self._export_single_layout(clicked_name, "png"))
             menu.addAction(a2)
 
+            # Enregistrer comme modèle (.qpt)
+            a3 = QAction(f"Enregistrer « {clicked_name} » comme modèle (.qpt)…", menu)
+            a3.triggered.connect(lambda: self._export_layout_as_template(clicked_name))
+            menu.addAction(a3)
+
+            # Si d'autres mises en page sont cochées, on sépare visuellement
             if checked and (clicked_name not in checked or len(checked) > 1):
                 menu.addSeparator()
 
-        # Actions "lot" si au moins 2 cochées (ou 1 si tu veux autoriser)
+        # Actions "lot" si au moins 1 mise en page cochée
         if checked:
             b1 = QAction(f"Exporter {len(checked)} mise(s) en page cochée(s) en PDF…", menu)
             b1.triggered.connect(lambda: self._export_multiple_layouts(checked, "pdf"))
@@ -1384,7 +1393,70 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             if lay:
                 res[n] = lay
         return res
-    
+
+    def _export_layout_as_template(self, layout_name: str):
+        """Enregistre une mise en page unique comme modèle de mise en page QGIS (.qpt)."""
+        try:
+            proj = self._resolve_temp_project_for_layouts()
+            if proj is None:
+                QMessageBox.warning(
+                    self,
+                    "QRator",
+                    "Projet introuvable pour enregistrer la mise en page comme modèle."
+                )
+                return
+
+            layouts = self._get_layouts_by_names(proj, [layout_name])
+            if layout_name not in layouts:
+                QMessageBox.warning(
+                    self,
+                    "QRator",
+                    f"Mise en page introuvable : {layout_name}"
+                )
+                return
+
+            layout = layouts[layout_name]
+
+            # Choix du chemin de sortie (.qpt)
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Enregistrer la mise en page comme modèle",
+                f"{layout_name}.qpt",
+                "Modèle de mise en page QGIS (*.qpt)"
+            )
+            if not path:
+                return
+
+            # Sauvegarde du modèle via l'API QGIS
+            context = QgsReadWriteContext()
+            try:
+                # On rattache le resolver du projet pour gérer les chemins relatifs correctement
+                context.setPathResolver(proj.pathResolver())
+            except Exception:
+                # Au pire, on continue avec le contexte par défaut
+                pass
+
+            ok = layout.saveAsTemplate(path, context)
+            if not ok:
+                QMessageBox.critical(
+                    self,
+                    "QRator",
+                    "Échec de l'enregistrement du modèle de mise en page."
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "QRator",
+                    f"Modèle de mise en page enregistré :\n{path}"
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "QRator",
+                f"Erreur lors de l'enregistrement du modèle : {e}"
+            )
+
     def _export_single_layout(self, layout_name: str, fmt: str):
         """Export d'une mise en page unique en PDF ou PNG(300dpi)."""
         try:
