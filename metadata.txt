@@ -11,10 +11,10 @@ about=Ce plugin permet d'accéder au contenu d'un projet QGIS sans l'ouvrir. Il 
 tracker=https://github.com/Bilou020285/qrator/issues
 repository=https://github.com/Bilou020285/qrator
 
-changelog=Version : Une nouvelle option d'export dans l'onglet Mises en page a été ajoutée. Elle permet d'enregistrer un modèle de mise en page (fichier .qpt). A new export option has been added. It allows to save a layout template (QPT file).
+changelog=Version : Le fichier projet QGZ comporte désormais le fichier QGS et le fichier QGD de stockage auxiliaire. The created QGZ file inclued the QGS and QGD (auxiliary storage) files.
 
 tags=python, QGIS, plugin, project management, project analysis, layers, styles, themes, layouts, relations, HTML report, filtered project, subproject, GIS
-version=1.2
+version=1.3
 license=GPL-2.0-or-later
 
 homepage=https://github.com/Bilou020285/qrator

@@ -540,8 +540,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         if file_path:
             try:
                 self.update_status("Loading project...")
-                # Effacer les sélections précédentes
-                self.selection_manager.clear_selection()
+                # Réinitialiser complètement le gestionnaire de sélection
+                self.selection_manager.reset()
                 xml_root, info = open_project(file_path)
                 self.current_project_path = file_path
                 self.projectPathLineEdit.setText(file_path)
@@ -888,7 +888,12 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             except Exception:
                 selected_elements["disconnect_local"] = False
 
-            success = save_new_project(output_path, xml_root, selected_elements)
+            success = save_new_project(
+                output_path,
+                xml_root,
+                selected_elements,
+                source_project_path=self.current_project_path,
+            )
 
             if success:
                 self.update_status(f"Project saved to {output_path}")

@@ -497,32 +497,91 @@ def disconnect_local_layers_in_xml(xml_root: etree._Element):
             pass
 # === /QRator: déconnexion ===
 
-def save_new_project(output_path: str, xml_root: etree._Element, selected: Dict) -> bool:
-    """
-    Écrit un .qgz filtré selon selected.
-    (DEBUG .qgs désactivé)
+# =========================
+# Sauvegarde : QGZ = QGS + QGD
+# =========================
+
+def save_new_project(output_path: str, xml_root: etree._Element, selected: Dict, source_project_path: str = None) -> bool:
+    """Écrit un nouveau projet filtré sur disque (au format .qgz).
+
+    Paramètres
+    ----------
+    output_path : str
+        Chemin du fichier .qgz de sortie.
+    xml_root : etree._Element
+        Racine XML du projet d'origine.
+    selected : dict
+        Dictionnaire de sélections retourné par SelectionManager.get_selected_elements().
+    source_project_path : str, optionnel
+        Chemin du projet source (.qgz ou .qgs). S'il pointe vers un
+        projet qui utilise un stockage auxiliaire (.qgd), ce fichier sera
+        recopié dans la nouvelle archive .qgz.
     """
     try:
+        # 1) Filtrer le XML selon les éléments sélectionnés
         filtered = filter_project_xml(xml_root, selected)
 
-        # Déconnecter les sources locales si demandé par l’UI
-        try:
-            if selected.get("disconnect_local", False):
-                disconnect_local_layers_in_xml(filtered)
-        except Exception:
-            pass  # on n'empêche pas la sauvegarde pour autant
-
-        # Emballer dans un .qgz
+        # 2) Écrire le projet filtré dans un fichier .qgs temporaire
         with tempfile.NamedTemporaryFile(suffix=".qgs", delete=False) as tmp:
             tmp.write(etree.tostring(filtered, pretty_print=True, encoding="utf-8"))
             tmp_qgs = tmp.name
 
+        # 3) Collecter les éventuels fichiers de stockage auxiliaire (.qgd)
+        aux_files = []  # liste de tuples (arcname, bytes)
+
+        if source_project_path:
+            try:
+                # Cas 1 : projet source déjà au format .qgz
+                if source_project_path.lower().endswith(".qgz") and os.path.exists(source_project_path):
+                    with zipfile.ZipFile(source_project_path, "r") as src_zip:
+                        for name in src_zip.namelist():
+                            if name.lower().endswith(".qgd"):
+                                try:
+                                    data = src_zip.read(name)
+                                    aux_files.append((name, data))
+                                    print(f"[QRator] Found auxiliary storage in source qgz: {name}")
+                                except Exception as e:
+                                    print(f"[QRator] Could not read aux file '{name}' from source qgz: {e}")
+
+                # Cas 2 : projet source .qgs avec un .qgd à côté
+                elif source_project_path.lower().endswith(".qgs"):
+                    base = os.path.splitext(source_project_path)[0]
+                    qgd_path = base + ".qgd"
+                    if os.path.exists(qgd_path):
+                        try:
+                            with open(qgd_path, "rb") as f:
+                                data = f.read()
+                            # À l'intérieur de l'archive, QGIS utilise généralement 'project.qgd'
+                            arcname = "project.qgd"
+                            aux_files.append((arcname, data))
+                            print(f"[QRator] Found auxiliary storage beside source qgs: {qgd_path}")
+                        except Exception as e:
+                            print(f"[QRator] Could not read aux file '{qgd_path}': {e}")
+            except Exception as e:
+                print(f"[QRator] Error while collecting auxiliary storage: {e}")
+
+        # 4) Emballer dans un .qgz : toujours écrire 'project.qgs'
         with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(tmp_qgs, arcname="project.qgs")
 
+            # Ré-injecter les éventuels fichiers .qgd collectés
+            if aux_files:
+                existing = set(zipf.namelist())
+                for arcname, data in aux_files:
+                    if arcname in existing:
+                        print(f"[QRator] Aux file '{arcname}' already present in qgz, skipping.")
+                        continue
+                    try:
+                        zipf.writestr(arcname, data)
+                        print(f"[QRator] Embedded auxiliary storage file '{arcname}' in qgz.")
+                    except Exception as e:
+                        print(f"[QRator] Could not write aux file '{arcname}' to qgz: {e}")
+
+        # Nettoyage du temporaire
         os.unlink(tmp_qgs)
         print(f"[QRator] Saved filtered project to {output_path}")
         return True
+
     except Exception as e:
         print(f"[QRator] save error: {e}")
         return False
