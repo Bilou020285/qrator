@@ -2,6 +2,7 @@
 import os
 import tempfile
 import zipfile
+import shutil
 import copy
 import re
 from typing import Dict, Set, DefaultDict, Tuple, Iterable
@@ -823,6 +824,41 @@ def _write_project_with_aux(xml_root: etree._Element,
         print(f"[QRator] save error: {e}")
         return False
 
+def create_project_backup(project_path: str) -> str:
+    """Crée une copie de sauvegarde du projet existant (et de son .qgd éventuel)
+    avec un suffixe '_backup', '_backup2', etc. Renvoie le chemin du projet backup.
+    """
+    base, ext = os.path.splitext(project_path)
+    suffix = "_backup"
+    backup_project_path = base + suffix + ext
+    index = 2
+
+    # On évite d'écraser une sauvegarde existante
+    while os.path.exists(backup_project_path):
+        backup_project_path = f"{base}{suffix}{index}{ext}"
+        index += 1
+
+    try:
+        shutil.copy2(project_path, backup_project_path)
+        print(f"[QRator] Project backup created at: {backup_project_path}")
+    except Exception as e:
+        print(f"[QRator] Could not copy project file for backup: {e}")
+        raise
+
+    # Si projet .qgs, on tente aussi de sauvegarder le .qgd voisin
+    if ext.lower() == ".qgs":
+        src_qgd = base + ".qgd"
+        if os.path.exists(src_qgd):
+            backup_base, _ = os.path.splitext(backup_project_path)
+            dst_qgd = backup_base + ".qgd"
+            try:
+                shutil.copy2(src_qgd, dst_qgd)
+                print(f"[QRator] Auxiliary storage backup created at: {dst_qgd}")
+            except Exception as e:
+                print(f"[QRator] Could not copy auxiliary storage for backup: {e}")
+
+    return backup_project_path
+
 def save_new_project(output_path: str,
                      xml_root: etree._Element,
                      selected: Dict,
@@ -873,6 +909,18 @@ def save_merged_project(existing_project_path: str,
     - output_path           : chemin du projet fusionné (souvent le même que A).
     """
     try:
+        # 0) Créer une sauvegarde du projet cible si on écrit par-dessus
+        try:
+            if os.path.abspath(existing_project_path) == os.path.abspath(output_path):
+                backup_path = create_project_backup(existing_project_path)
+                print(f"[QRator] Backup created before merge: {backup_path}")
+            else:
+                backup_path = None
+        except Exception as e:
+            # On log l'erreur mais on n'empêche pas la fusion si le backup échoue
+            print(f"[QRator] Could not create backup before merge: {e}")
+            backup_path = None
+
         # 1) Charger le projet de base (A)
         base_root, _ = open_project(existing_project_path)
 

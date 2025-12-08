@@ -902,6 +902,16 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                 msg.setDefaultButton(overwrite_btn)
                 msg.exec_()
 
+                clicked = msg.clickedButton()
+                if clicked == cancel_btn:
+                    self.update_status("Export cancelled.")
+                    return
+                elif clicked == merge_btn:
+                    mode = "merge"
+                    target_existing_path = output_path
+                else:
+                    mode = "overwrite"
+
             # 6) Exécuter l’export (avec curseur d’attente)
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
