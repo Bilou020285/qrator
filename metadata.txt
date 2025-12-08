@@ -11,10 +11,10 @@ about=Ce plugin permet d'accéder au contenu d'un projet QGIS sans l'ouvrir. Il 
 tracker=https://github.com/Bilou020285/qrator/issues
 repository=https://github.com/Bilou020285/qrator
 
-changelog=Version : Le fichier projet QGZ comporte désormais le fichier QGS et le fichier QGD de stockage auxiliaire. The created QGZ file inclued the QGS and QGD (auxiliary storage) files.
+changelog=Version : v1.3 Le fichier projet QGZ comporte désormais le fichier QGS et le fichier QGD de stockage auxiliaire. The created QGZ file inclued the QGS and QGD (auxiliary storage) files. v1.4 QRator peut désormais fusionner le projet crée avec QRator avec un projet existant. QRator can now merge the project created with QRator with an existing project.
 
 tags=python, QGIS, plugin, project management, project analysis, layers, styles, themes, layouts, relations, HTML report, filtered project, subproject, GIS
-version=1.3
+version=1.4
 license=GPL-2.0-or-later
 
 homepage=https://github.com/Bilou020285/qrator

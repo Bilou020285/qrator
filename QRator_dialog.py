@@ -4,7 +4,7 @@ from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QFont
 from .ui.QRator_dialog import Ui_QRatorDialog
 from .selection_manager import SelectionManager
-from .qgz_manager import open_project, save_new_project
+from .qgz_manager import open_project, save_new_project, save_merged_project
 from .parse_layers import parse_layers
 from .parse_themes import parse_themes
 from .parse_layouts_relations import parse_layouts_relations
@@ -826,12 +826,12 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         return html
 
     def export_project(self):
-        """Exporte le projet filtré en fonction des sélections dans tous les onglets."""
+        """Exporte le projet filtré ou fusionne dans un projet existant."""
         if not hasattr(self, 'modifiedPathLineEdit'):
             QMessageBox.warning(self, "Warning", "UI element missing: modifiedPathLineEdit")
             return
 
-        output_path = self.modifiedPathLineEdit.text()
+        output_path = self.modifiedPathLineEdit.text().strip()
         if not output_path:
             QMessageBox.warning(self, "Warning", "Please specify a path for the modified project.")
             return
@@ -842,44 +842,30 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
 
         try:
             self.update_status("Exporting project...")
+
+            # 1) Récupérer les sélections courantes
             selected_elements = self.selection_manager.get_selected_elements()
             print("[QRator] Selected elements before export:", selected_elements)
 
-            xml_root, _ = open_project(self.current_project_path)
+            # 2) Vérifier qu'au moins une couche est effectivement sélectionnée
+            try:
+                # Utilise l'API interne du SelectionManager, plus fiable car
+                # elle tient compte des thèmes, styles, etc.
+                eff_layers = self.selection_manager._effective_selected_layer_ids(selected_elements)
+            except Exception:
+                # Fallback minimal si jamais l'API interne change
+                layers = set(selected_elements.get("layers", set()))
+                eff_layers = set(layers)
 
-            # Autoriser export si au moins 1 couche effective (via onglet Couches ou Thèmes)
-            layers = set(selected_elements.get("layers", set()))
-            theme_layers = set(selected_elements.get("theme_layers", set()))
-            theme_styles = set(selected_elements.get("theme_styles", set()))
-
-            effective_layers = set(layers)
-            for tl in theme_layers:
-                try:
-                    _theme, lid = tl.rsplit("_", 1)
-                    effective_layers.add(lid)
-                except Exception:
-                    pass
-            for ts in theme_styles:
-                try:
-                    _theme, lid, _sname = ts.rsplit("_", 2)
-                    effective_layers.add(lid)
-                except Exception:
-                    pass
-
-            if not effective_layers:
+            if not eff_layers:
                 QMessageBox.warning(
-                    self, "Warning",
-                    "Please select at least one layer (directly in Couches or via Thèmes)."
+                    self,
+                    "Warning",
+                    "Please select at least one layer (directly in Couches or via Thèmes).",
                 )
                 return
 
-            import inspect, qrator.qgz_manager as qm
-            
-            print("[QRator] qgz_manager file:", inspect.getfile(qm))
-            print("[QRator] selections:", self.selection_manager.get_selected_elements())
-            print("[QRator] will save to:", output_path)
-
-            # Passer l’état de la case à cocher au moteur d’export
+            # 3) Propager l’option « déconnecter les couches locales » au moteur d’export
             try:
                 selected_elements["disconnect_local"] = bool(
                     getattr(self, "chk_disconnect_local", None)
@@ -888,19 +874,73 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             except Exception:
                 selected_elements["disconnect_local"] = False
 
-            success = save_new_project(
-                output_path,
-                xml_root,
-                selected_elements,
-                source_project_path=self.current_project_path,
-            )
+            # 4) Charger le projet source (projet actuellement ouvert dans QGIS = projet B)
+            xml_root_source, _ = open_project(self.current_project_path)
 
+            # 5) Déterminer le mode : nouveau fichier / écrasement / fusion
+            mode = "overwrite"
+            target_existing_path = None
+
+            if os.path.exists(output_path):
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Question)
+                msg.setWindowTitle("Projet existant")
+                msg.setText(
+                    "Le fichier de projet indiqué existe déjà.\n\n"
+                    "Que souhaites-tu faire ?"
+                )
+                msg.setInformativeText(
+                    "• Écraser : remplace complètement le projet existant par le projet filtré.\n"
+                    "• Fusionner : complète le projet existant avec les éléments sélectionnés.\n"
+                    "• Annuler : abandonne l'export."
+                )
+
+                overwrite_btn = msg.addButton("Écraser", QMessageBox.YesRole)
+                merge_btn = msg.addButton("Fusionner", QMessageBox.NoRole)
+                cancel_btn = msg.addButton("Annuler", QMessageBox.RejectRole)
+
+                msg.setDefaultButton(overwrite_btn)
+                msg.exec_()
+
+            # 6) Exécuter l’export (avec curseur d’attente)
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                if mode == "merge":
+                    # Fusionner les éléments sélectionnés du projet courant (B)
+                    # dans le projet déjà existant (A = output_path).
+                    if not target_existing_path or not os.path.exists(target_existing_path):
+                        QMessageBox.warning(
+                            self,
+                            "Warning",
+                            "Le projet cible pour la fusion n'existe pas ou n'est pas accessible.",
+                        )
+                        return
+
+                    success = save_merged_project(
+                        existing_project_path=target_existing_path,
+                        xml_root_source=xml_root_source,
+                        selected=selected_elements,
+                        output_path=output_path,
+                    )
+                else:
+                    # Cas classique : création d'un nouveau projet filtré
+                    success = save_new_project(
+                        output_path,
+                        xml_root_source,
+                        selected_elements,
+                        source_project_path=self.current_project_path,
+                    )
+            finally:
+                QApplication.restoreOverrideCursor()
+
+            # 7) Feedback utilisateur
             if success:
                 self.update_status(f"Project saved to {output_path}")
                 QMessageBox.information(self, "Success", f"Project saved successfully: {output_path}")
             else:
                 self.update_status("Error saving project")
                 QMessageBox.critical(self, "Error", "Failed to save the project.")
+
         except Exception as e:
             self.update_status("Error exporting project")
             QMessageBox.critical(self, "Error", f"Failed to export the project: {str(e)}")
