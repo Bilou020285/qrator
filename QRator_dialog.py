@@ -4,59 +4,33 @@ from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QFont
 from .ui.QRator_dialog import Ui_QRatorDialog
 from .selection_manager import SelectionManager
-from .qgz_manager import open_project, save_new_project, save_merged_project
+from .qgz_manager import open_project, save_new_project
 from .parse_layers import parse_layers
 from .parse_themes import parse_themes
 from .parse_layouts_relations import parse_layouts_relations
 from .html_report_generator import HTMLReportGenerator  # Nouveau module
 import os
 import datetime
-from qgis.core import QgsApplication, QgsProject, QgsLayoutExporter, QgsReadWriteContext
+from qgis.core import QgsApplication, QgsProject, QgsLayoutExporter
 from qgis.PyQt.QtGui import QPixmap, QGuiApplication, QIcon  # Ajoutez QPixmap à vos imports existants
-from qgis.PyQt.QtWidgets import QMenu, QAction, QCheckBox
+from qgis.PyQt.QtWidgets import QMenu, QAction
 import tempfile
-
+import re
+import copy
+import sys
+import json
+import time
+import subprocess
+from lxml import etree
 
 class QRatorDialog(QDialog, Ui_QRatorDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setupUi(self)
 
-        # === QRator: Checkbox "Déconnecter les sources locales" ===
-        def _init_disconnect_checkbox(self):
-            """Crée et insère la case juste au-dessus de la ligne 'Chemin du projet modifié (.qgz)...'."""
-            self.chk_disconnect_local = QCheckBox("Déconnecter les sources de données locales", self)
-            self.chk_disconnect_local.setToolTip(
-                "Si coché : les couches locales (SHP, GPKG/SpatiaLite, CSV, rasters, etc.) "
-                "seront volontairement 'cassées' dans le projet généré pour que QGIS propose "
-                "de les réadresser à l'ouverture. Les couches distantes (PostGIS, WMS/WFS/WMTS, "
-                "XYZ, ArcGIS, vectortiles, etc.) sont conservées."
-            )
-
-            # État par défaut : toujours décoché
-            self.chk_disconnect_local.setChecked(False)
-
-            # Insertion juste avant outputLayout dans mainLayout
-            try:
-                main = getattr(self, "mainLayout", None)
-                out_lay = getattr(self, "outputLayout", None)
-                if main is not None and out_lay is not None:
-                    insert_idx = main.count()
-                    for i in range(main.count()):
-                        item = main.itemAt(i)
-                        if item is not None and item.layout() is out_lay:
-                            insert_idx = i
-                            break
-                    main.insertWidget(insert_idx, self.chk_disconnect_local)
-                else:
-                    self.mainLayout.addWidget(self.chk_disconnect_local)
-            except Exception:
-                self.mainLayout.addWidget(self.chk_disconnect_local)
-
-        # Appel d'init
-        self._init_disconnect_checkbox = _init_disconnect_checkbox.__get__(self, self.__class__)
-        self._init_disconnect_checkbox()
-        # === /QRator: Checkbox ===
+        # Cache du XML du projet externe (évite de re-décompresser/re-parser un gros .qgz
+        # et permet des exports "légers" comme les modèles .qpt)
+        self._external_xml_root = None
 
         # Couches (déjà présent chez toi)
         if hasattr(self, 'layerTree') and hasattr(self.layerTree.header(), 'setSectionResizeMode'):
@@ -540,9 +514,10 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         if file_path:
             try:
                 self.update_status("Loading project...")
-                # Réinitialiser complètement le gestionnaire de sélection
-                self.selection_manager.reset()
+                # Effacer les sélections précédentes
+                self.selection_manager.clear_selection()
                 xml_root, info = open_project(file_path)
+                self._external_xml_root = xml_root
                 self.current_project_path = file_path
                 self.projectPathLineEdit.setText(file_path)
                 # Remplir les arbres avec des éléments décochés par défaut
@@ -569,6 +544,7 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         try:
             self.update_status("Refreshing analysis...")
             xml_root, _ = open_project(self.current_project_path)
+            self._external_xml_root = xml_root
             self.analyze_project(xml_root)
             self.update_status("Analysis refreshed")
         except Exception as e:
@@ -826,12 +802,12 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         return html
 
     def export_project(self):
-        """Exporte le projet filtré ou fusionne dans un projet existant."""
+        """Exporte le projet filtré en fonction des sélections dans tous les onglets."""
         if not hasattr(self, 'modifiedPathLineEdit'):
             QMessageBox.warning(self, "Warning", "UI element missing: modifiedPathLineEdit")
             return
 
-        output_path = self.modifiedPathLineEdit.text().strip()
+        output_path = self.modifiedPathLineEdit.text()
         if not output_path:
             QMessageBox.warning(self, "Warning", "Please specify a path for the modified project.")
             return
@@ -842,115 +818,50 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
 
         try:
             self.update_status("Exporting project...")
-
-            # 1) Récupérer les sélections courantes
             selected_elements = self.selection_manager.get_selected_elements()
             print("[QRator] Selected elements before export:", selected_elements)
 
-            # 2) Vérifier qu'au moins une couche est effectivement sélectionnée
-            try:
-                # Utilise l'API interne du SelectionManager, plus fiable car
-                # elle tient compte des thèmes, styles, etc.
-                eff_layers = self.selection_manager._effective_selected_layer_ids(selected_elements)
-            except Exception:
-                # Fallback minimal si jamais l'API interne change
-                layers = set(selected_elements.get("layers", set()))
-                eff_layers = set(layers)
+            xml_root, _ = open_project(self.current_project_path)
 
-            if not eff_layers:
+            # Autoriser export si au moins 1 couche effective (via onglet Couches ou Thèmes)
+            layers = set(selected_elements.get("layers", set()))
+            theme_layers = set(selected_elements.get("theme_layers", set()))
+            theme_styles = set(selected_elements.get("theme_styles", set()))
+
+            effective_layers = set(layers)
+            for tl in theme_layers:
+                try:
+                    _theme, lid = tl.rsplit("_", 1)
+                    effective_layers.add(lid)
+                except Exception:
+                    pass
+            for ts in theme_styles:
+                try:
+                    _theme, lid, _sname = ts.rsplit("_", 2)
+                    effective_layers.add(lid)
+                except Exception:
+                    pass
+
+            if not effective_layers:
                 QMessageBox.warning(
-                    self,
-                    "Warning",
-                    "Please select at least one layer (directly in Couches or via Thèmes).",
+                    self, "Warning",
+                    "Please select at least one layer (directly in Couches or via Thèmes)."
                 )
                 return
 
-            # 3) Propager l’option « déconnecter les couches locales » au moteur d’export
-            try:
-                selected_elements["disconnect_local"] = bool(
-                    getattr(self, "chk_disconnect_local", None)
-                    and self.chk_disconnect_local.isChecked()
-                )
-            except Exception:
-                selected_elements["disconnect_local"] = False
+            import inspect, qrator.qgz_manager as qm
+            
+            print("[QRator] qgz_manager file:", inspect.getfile(qm))
+            print("[QRator] selections:", self.selection_manager.get_selected_elements())
+            print("[QRator] will save to:", output_path)
 
-            # 4) Charger le projet source (projet actuellement ouvert dans QGIS = projet B)
-            xml_root_source, _ = open_project(self.current_project_path)
-
-            # 5) Déterminer le mode : nouveau fichier / écrasement / fusion
-            mode = "overwrite"
-            target_existing_path = None
-
-            if os.path.exists(output_path):
-                msg = QMessageBox(self)
-                msg.setIcon(QMessageBox.Question)
-                msg.setWindowTitle("Projet existant")
-                msg.setText(
-                    "Le fichier de projet indiqué existe déjà.\n\n"
-                    "Que souhaites-tu faire ?"
-                )
-                msg.setInformativeText(
-                    "• Écraser : remplace complètement le projet existant par le projet filtré.\n"
-                    "• Fusionner : complète le projet existant avec les éléments sélectionnés.\n"
-                    "• Annuler : abandonne l'export."
-                )
-
-                overwrite_btn = msg.addButton("Écraser", QMessageBox.YesRole)
-                merge_btn = msg.addButton("Fusionner", QMessageBox.NoRole)
-                cancel_btn = msg.addButton("Annuler", QMessageBox.RejectRole)
-
-                msg.setDefaultButton(overwrite_btn)
-                msg.exec_()
-
-                clicked = msg.clickedButton()
-                if clicked == cancel_btn:
-                    self.update_status("Export cancelled.")
-                    return
-                elif clicked == merge_btn:
-                    mode = "merge"
-                    target_existing_path = output_path
-                else:
-                    mode = "overwrite"
-
-            # 6) Exécuter l’export (avec curseur d’attente)
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            try:
-                if mode == "merge":
-                    # Fusionner les éléments sélectionnés du projet courant (B)
-                    # dans le projet déjà existant (A = output_path).
-                    if not target_existing_path or not os.path.exists(target_existing_path):
-                        QMessageBox.warning(
-                            self,
-                            "Warning",
-                            "Le projet cible pour la fusion n'existe pas ou n'est pas accessible.",
-                        )
-                        return
-
-                    success = save_merged_project(
-                        existing_project_path=target_existing_path,
-                        xml_root_source=xml_root_source,
-                        selected=selected_elements,
-                        output_path=output_path,
-                    )
-                else:
-                    # Cas classique : création d'un nouveau projet filtré
-                    success = save_new_project(
-                        output_path,
-                        xml_root_source,
-                        selected_elements,
-                        source_project_path=self.current_project_path,
-                    )
-            finally:
-                QApplication.restoreOverrideCursor()
-
-            # 7) Feedback utilisateur
+            success = save_new_project(output_path, xml_root, selected_elements)
             if success:
                 self.update_status(f"Project saved to {output_path}")
                 QMessageBox.information(self, "Success", f"Project saved successfully: {output_path}")
             else:
                 self.update_status("Error saving project")
                 QMessageBox.critical(self, "Error", "Failed to save the project.")
-
         except Exception as e:
             self.update_status("Error exporting project")
             QMessageBox.critical(self, "Error", f"Failed to export the project: {str(e)}")
@@ -1343,8 +1254,7 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             QMessageBox.critical(self, "QRator", f"Erreur: {e}")
 
     def _on_layouts_context_menu(self, pos: QPoint):
-        """Menu contextuel sur layoutTree : export PDF/PNG (300 dpi), QPT pour la mise en page cliquée,
-        et export en lot (PDF/PNG) pour les mises en page cochées."""
+        """Menu contextuel sur layoutTree : export PDF/PNG (300 dpi), individuel ou en lot (éléments cochés)."""
         sender = self.sender()
         if sender is None:
             return
@@ -1365,26 +1275,22 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
 
         # Actions "sur la mise en page cliquée"
         if clicked_is_layout and clicked_name:
-            # Export PDF
             a1 = QAction(f"Exporter « {clicked_name} » en PDF…", menu)
             a1.triggered.connect(lambda: self._export_single_layout(clicked_name, "pdf"))
             menu.addAction(a1)
 
-            # Export PNG (300 dpi)
             a2 = QAction(f"Exporter « {clicked_name} » en PNG (300 dpi)…", menu)
             a2.triggered.connect(lambda: self._export_single_layout(clicked_name, "png"))
             menu.addAction(a2)
 
-            # Enregistrer comme modèle (.qpt)
-            a3 = QAction(f"Enregistrer « {clicked_name} » comme modèle (.qpt)…", menu)
-            a3.triggered.connect(lambda: self._export_layout_as_template(clicked_name))
+            a3 = QAction(f"Enregistrer « {clicked_name} » en modèle QPT…", menu)
+            a3.triggered.connect(lambda: self._export_single_layout(clicked_name, "qpt"))
             menu.addAction(a3)
 
-            # Si d'autres mises en page sont cochées, on sépare visuellement
             if checked and (clicked_name not in checked or len(checked) > 1):
                 menu.addSeparator()
 
-        # Actions "lot" si au moins 1 mise en page cochée
+        # Actions "lot" si au moins 2 cochées (ou 1 si tu veux autoriser)
         if checked:
             b1 = QAction(f"Exporter {len(checked)} mise(s) en page cochée(s) en PDF…", menu)
             b1.triggered.connect(lambda: self._export_multiple_layouts(checked, "pdf"))
@@ -1393,6 +1299,10 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             b2 = QAction(f"Exporter {len(checked)} mise(s) en page cochée(s) en PNG (300 dpi)…", menu)
             b2.triggered.connect(lambda: self._export_multiple_layouts(checked, "png"))
             menu.addAction(b2)
+
+            b3 = QAction(f"Enregistrer {len(checked)} mise(s) en page cochée(s) en modèles QPT…", menu)
+            b3.triggered.connect(lambda: self._export_multiple_layouts(checked, "qpt"))
+            menu.addAction(b3)
 
         if menu.actions():
             menu.exec_(sender.mapToGlobal(pos))
@@ -1448,98 +1358,46 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             if lay:
                 res[n] = lay
         return res
-
-    def _export_layout_as_template(self, layout_name: str):
-        """Enregistre une mise en page unique comme modèle de mise en page QGIS (.qpt)."""
-        try:
-            proj = self._resolve_temp_project_for_layouts()
-            if proj is None:
-                QMessageBox.warning(
-                    self,
-                    "QRator",
-                    "Projet introuvable pour enregistrer la mise en page comme modèle."
-                )
-                return
-
-            layouts = self._get_layouts_by_names(proj, [layout_name])
-            if layout_name not in layouts:
-                QMessageBox.warning(
-                    self,
-                    "QRator",
-                    f"Mise en page introuvable : {layout_name}"
-                )
-                return
-
-            layout = layouts[layout_name]
-
-            # Choix du chemin de sortie (.qpt)
-            path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Enregistrer la mise en page comme modèle",
-                f"{layout_name}.qpt",
-                "Modèle de mise en page QGIS (*.qpt)"
-            )
-            if not path:
-                return
-
-            # Sauvegarde du modèle via l'API QGIS
-            context = QgsReadWriteContext()
-            try:
-                # On rattache le resolver du projet pour gérer les chemins relatifs correctement
-                context.setPathResolver(proj.pathResolver())
-            except Exception:
-                # Au pire, on continue avec le contexte par défaut
-                pass
-
-            ok = layout.saveAsTemplate(path, context)
-            if not ok:
-                QMessageBox.critical(
-                    self,
-                    "QRator",
-                    "Échec de l'enregistrement du modèle de mise en page."
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "QRator",
-                    f"Modèle de mise en page enregistré :\n{path}"
-                )
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "QRator",
-                f"Erreur lors de l'enregistrement du modèle : {e}"
-            )
-
+    
     def _export_single_layout(self, layout_name: str, fmt: str):
-        """Export d'une mise en page unique en PDF ou PNG(300dpi)."""
+        """Export d'une mise en page unique.
+
+        - pdf : export rendu via QgsLayoutExporter
+        - png : export rendu via QgsLayoutExporter (300 dpi)
+        - qpt : export du modèle (template) sans charger le projet QGIS complet
+                (beaucoup plus robuste sur les projets énormes)
+        """
         try:
-            proj = self._resolve_temp_project_for_layouts()
-            if proj is None:
-                QMessageBox.warning(self, "QRator", "Projet introuvable pour exporter la mise en page.")
+            # Export QPT : ne charge PAS le projet complet, on extrait le noeud <Layout> depuis le XML.
+            if fmt.lower() == "qpt":
+                default_name = f"{self._safe_filename(layout_name)}.qpt"
+                path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Enregistrer le modèle QPT",
+                    default_name,
+                    "QGIS Print Template (*.qpt)"
+                )
+                if not path:
+                    return
+                ok, msg = self._export_layout_to_qpt(layout_name, path)
+                if not ok:
+                    QMessageBox.critical(self, "QRator", f"Échec d'enregistrement du QPT.\n{msg}")
+                else:
+                    QMessageBox.information(self, "QRator", f"QPT enregistré :\n{path}")
                 return
-
-            layouts = self._get_layouts_by_names(proj, [layout_name])
-            if layout_name not in layouts:
-                QMessageBox.warning(self, "QRator", f"Mise en page introuvable : {layout_name}")
-                return
-
-            layout = layouts[layout_name]
-            exporter = QgsLayoutExporter(layout)
 
             if fmt.lower() == "pdf":
                 path, _ = QFileDialog.getSaveFileName(self, "Exporter en PDF",
                                                     f"{layout_name}.pdf", "PDF (*.pdf)")
                 if not path:
                     return
-                ps = QgsLayoutExporter.PdfExportSettings()
-                # Optionnel : forcer sortie vectorielle quand possible
-                ps.forceVectorOutput = True
-                code = exporter.exportToPdf(path, ps)
-                ok = (code == QgsLayoutExporter.Success or code == 0)
+                ok, msg = self._export_layouts_rendered_safe(
+                    [{"layout_name": layout_name, "out_path": path}],
+                    fmt="pdf",
+                    dpi=300,
+                )
                 if not ok:
-                    QMessageBox.critical(self, "QRator", f"Échec d'export PDF ({code}).")
+                    QMessageBox.critical(self, "QRator", f"Échec d'export PDF.\n{msg}")
                     return
                 QMessageBox.information(self, "QRator", f"PDF exporté :\n{path}")
                 return
@@ -1550,13 +1408,13 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                                                     f"{layout_name}.png", "PNG (*.png)")
                 if not path:
                     return
-                iset = QgsLayoutExporter.ImageExportSettings()
-                iset.dpi = 300
-                # Si plusieurs pages, QGIS nommera automatiquement fichier_1.png, fichier_2.png, etc.
-                code = exporter.exportToImage(path, iset)
-                ok = (code == QgsLayoutExporter.Success or code == 0)
+                ok, msg = self._export_layouts_rendered_safe(
+                    [{"layout_name": layout_name, "out_path": path}],
+                    fmt="png",
+                    dpi=300,
+                )
                 if not ok:
-                    QMessageBox.critical(self, "QRator", f"Échec d'export PNG ({code}).")
+                    QMessageBox.critical(self, "QRator", f"Échec d'export PNG.\n{msg}")
                     return
                 QMessageBox.information(self, "QRator", f"PNG exporté :\n{path}")
                 return
@@ -1570,63 +1428,288 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         """Export de plusieurs mises en page cochées. Demande un dossier, produit 1 fichier par mise en page.
         - PDF : <nom>.pdf
         - PNG 300dpi : <nom>.png (ou <nom>_1.png, <nom>_2.png si plusieurs pages)
+        - QPT : <nom>.qpt (export modèle sans charger le projet complet)
         """
         try:
-            proj = self._resolve_temp_project_for_layouts()
-            if proj is None:
-                QMessageBox.warning(self, "QRator", "Projet introuvable pour exporter les mises en page.")
-                return
+            if fmt.lower() == "qpt":
+                out_dir = QFileDialog.getExistingDirectory(self, "Choisir un dossier de sortie (QPT)")
+                if not out_dir:
+                    return
 
-            lay_map = self._get_layouts_by_names(proj, layout_names)
-            missing = [n for n in layout_names if n not in lay_map]
-            if missing:
-                QMessageBox.warning(self, "QRator", "Mises en page introuvables :\n- " + "\n- ".join(missing))
-                # on continue quand même pour celles trouvées
+                exported = 0
+                errors = []
+
+                for name in layout_names:
+                    out_path = os.path.join(out_dir, f"{self._safe_filename(name)}.qpt")
+                    ok, msg = self._export_layout_to_qpt(name, out_path)
+                    if ok:
+                        exported += 1
+                    else:
+                        errors.append(f"{name} : {msg}")
+
+                if exported and not errors:
+                    QMessageBox.information(self, "QRator", f"Export QPT terminé : {exported} fichier(s) écrit(s) dans\n{out_dir}")
+                elif exported and errors:
+                    QMessageBox.warning(
+                        self,
+                        "QRator",
+                        f"Export QPT partiel : {exported} ok / {len(errors)} erreurs\n" + "\n".join(errors)
+                    )
+                else:
+                    QMessageBox.critical(self, "QRator", "Aucun export QPT réalisé.\n" + ("\n".join(errors) if errors else ""))
+                return
 
             # Choisit un dossier de sortie
             out_dir = QFileDialog.getExistingDirectory(self, "Choisir un dossier de sortie")
             if not out_dir:
                 return
 
-            exported = 0
-            errors = []
+            # On exporte en "safe mode" via un processus séparé :
+            # - ça évite de charger le .qgz énorme DANS le process QGIS (source fréquente de crash)
+            # - si ça explose (RAM/driver), seul le sous-process se termine
 
-            for name, layout in lay_map.items():
-                exporter = QgsLayoutExporter(layout)
+            items = []
+            for name in layout_names:
+                safe = self._safe_filename(name)
                 if fmt.lower() == "pdf":
-                    out_path = os.path.join(out_dir, f"{name}.pdf")
-                    ps = QgsLayoutExporter.PdfExportSettings()
-                    ps.forceVectorOutput = True
-                    code = exporter.exportToPdf(out_path, ps)
-                    ok = (code == QgsLayoutExporter.Success or code == 0)
-                    if ok:
-                        exported += 1
-                    else:
-                        errors.append(f"{name} (code={code})")
+                    items.append({"layout_name": name, "out_path": os.path.join(out_dir, f"{safe}.pdf")})
                 elif fmt.lower() == "png":
-                    out_path = os.path.join(out_dir, f"{name}.png")
-                    iset = QgsLayoutExporter.ImageExportSettings()
-                    iset.dpi = 300
-                    code = exporter.exportToImage(out_path, iset)
-                    ok = (code == QgsLayoutExporter.Success or code == 0)
-                    if ok:
-                        exported += 1
-                    else:
-                        errors.append(f"{name} (code={code})")
+                    items.append({"layout_name": name, "out_path": os.path.join(out_dir, f"{safe}.png")})
                 else:
-                    errors.append(f"{name} (format non supporté)")
+                    items.append({"layout_name": name, "out_path": os.path.join(out_dir, f"{safe}.{fmt}")})
 
-            if exported and not errors:
-                QMessageBox.information(self, "QRator", f"Export terminé : {exported} fichier(s) écrit(s) dans\n{out_dir}")
-            elif exported and errors:
-                QMessageBox.warning(self, "QRator",
-                                    f"Export partiel : {exported} ok / {len(errors)} erreurs\n"
-                                    + "\n".join(errors))
+            ok, msg = self._export_layouts_rendered_safe(items, fmt=fmt.lower(), dpi=300)
+            if ok:
+                QMessageBox.information(self, "QRator", f"Export terminé.\n{msg}\n\nDossier :\n{out_dir}")
             else:
-                QMessageBox.critical(self, "QRator", "Aucun export réalisé.\n" + ("\n".join(errors) if errors else ""))
+                QMessageBox.critical(self, "QRator", f"Export échoué.\n{msg}")
 
         except Exception as e:
             QMessageBox.critical(self, "QRator", f"Erreur export lot : {e}")
+
+    # =========================
+    # Export PDF/PNG "safe" via process séparé
+    # =========================
+
+    def _export_layouts_rendered_safe(self, items, fmt: str, dpi: int = 300):
+        """Export PDF/PNG robuste pour les gros projets.
+
+        ⚠️ Contrairement au .qpt, un PDF/PNG nécessite un rendu des cartes →
+        il faut charger le projet et ses couches. Le "safe" ici consiste à le faire
+        dans un SOUS-PROCESSUS, pour éviter de faire planter QGIS si le projet est énorme.
+
+        Args:
+            items: liste de dicts {layout_name, out_path}
+            fmt: "pdf" ou "png"
+            dpi: dpi pour le png (et éventuellement pdf rasterisé)
+
+        Returns:
+            (ok: bool, msg: str)
+        """
+        fmt = (fmt or "").lower().strip()
+        if fmt not in ("pdf", "png"):
+            return False, f"Format non supporté : {fmt}"
+
+        proj_path = getattr(self, "current_project_path", "") or getattr(self, "project_path", "")
+        if not proj_path:
+            return False, "Aucun chemin de projet disponible."
+
+        # Worker Python embarqué dans le plugin
+        worker_path = os.path.join(os.path.dirname(__file__), "layout_export_worker.py")
+        if not os.path.exists(worker_path):
+            return False, f"Worker introuvable : {worker_path}"
+
+        cfg = {
+            "prefix": QgsApplication.prefixPath(),
+            "project_path": proj_path,
+            "format": fmt,
+            "dpi": int(dpi or 300),
+            "items": items or [],
+        }
+
+        tmp_cfg = None
+        try:
+            tmp_cfg = tempfile.NamedTemporaryFile(delete=False, suffix="_qrator_export.json", mode="w", encoding="utf-8")
+            json.dump(cfg, tmp_cfg, ensure_ascii=False, indent=2)
+            tmp_cfg.close()
+
+            cmd = [sys.executable, worker_path, tmp_cfg.name]
+            env = os.environ.copy()
+            # Sur Linux, un QGIS "headless" peut demander ce flag.
+            # Sur Windows/macOS, on évite de le forcer (plugin Qt "offscreen" pas toujours dispo).
+            if os.name != "nt" and sys.platform.startswith("linux"):
+                env.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+            progress = QProgressDialog("Export en cours…", "Annuler", 0, 0, self)
+            progress.setWindowModality(Qt.ApplicationModal)
+            progress.setMinimumDuration(0)
+            progress.show()
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+
+            # Boucle d'attente non bloquante (garde l'UI vivante)
+            while proc.poll() is None:
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    progress.close()
+                    return False, "Export annulé."
+                time.sleep(0.1)
+
+            out, err = proc.communicate(timeout=1)
+            progress.close()
+
+            # On tente de récupérer le dernier JSON valide sur stdout
+            payload = None
+            for line in reversed((out or "").splitlines()):
+                line = (line or "").strip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        payload = json.loads(line)
+                        break
+                    except Exception:
+                        continue
+
+            if not payload:
+                # fallback : l'erreur est probablement dans stderr
+                return False, (err or out or "").strip() or "Aucune sortie du worker."
+
+            if not payload.get("ok"):
+                # On remonte l'erreur
+                return False, (payload.get("error") or "Erreur inconnue")
+
+            results = payload.get("results") or []
+            ok_count = sum(1 for r in results if r.get("ok"))
+            ko = [r for r in results if not r.get("ok")]
+
+            if ko:
+                lines = [f"{ok_count} export(s) OK / {len(ko)} erreur(s)."]
+                for r in ko[:10]:
+                    lines.append(f"- {r.get('layout_name')} : {r.get('error') or 'échec'}")
+                if len(ko) > 10:
+                    lines.append(f"… +{len(ko)-10} autres")
+                return True, "\n".join(lines)
+
+            return True, f"{ok_count} export(s) OK."
+
+        except Exception as e:
+            return False, str(e)
+        finally:
+            try:
+                if tmp_cfg and os.path.exists(tmp_cfg.name):
+                    os.remove(tmp_cfg.name)
+            except Exception:
+                pass
+
+    # =========================
+    # Export QPT (sans charger le projet QGIS)
+    # =========================
+
+    def _safe_filename(self, name: str) -> str:
+        """Nettoie un nom pour en faire un nom de fichier Windows-compatible."""
+        name = (name or "").strip()
+        if not name:
+            return "layout"
+        # caractères interdits Windows
+        name = re.sub(r"[<>:\\/*?|\"]", "_", name)
+        # évite les retours ligne/tab
+        name = re.sub(r"[\r\n\t]", "_", name)
+        # évite les points/espaces en fin de nom
+        name = name.rstrip(" .")
+        return name or "layout"
+
+    def _get_external_xml_root(self):
+        """Récupère le XML du projet externe (cache si dispo), sinon relit le fichier."""
+        if getattr(self, "_external_xml_root", None) is not None:
+            return self._external_xml_root
+
+        proj_path = getattr(self, "current_project_path", "") or getattr(self, "project_path", "")
+        if not proj_path:
+            return None
+
+        xml_root, _ = open_project(proj_path)
+        self._external_xml_root = xml_root
+        return xml_root
+
+    def _export_layout_to_qpt(self, layout_name: str, out_path: str):
+        """Écrit un fichier .qpt pour une mise en page donnée.
+
+        Implémentation volontairement *light* : on extrait le noeud <Layout> depuis l'XML du projet (.qgs/.qgz)
+        et on l'écrit tel quel. Ça évite de faire un QgsProject().read() sur des projets énormes (souvent source de crash).
+        """
+        try:
+            xml_root = self._get_external_xml_root()
+            if xml_root is None:
+                return False, "Aucun projet externe chargé."
+
+            # QGIS écrit généralement <Layout name="…"> (L majuscule),
+            # mais certaines variantes peuvent être en minuscule ou sous namespace.
+            # -> on fait un test insensible à la casse sur le *nom local*.
+            xp = (
+                ".//*[translate(local-name(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='layout' "
+                "and ((@name=$n) or (@title=$n))]"
+            )
+            hits = xml_root.xpath(xp, n=layout_name)
+
+            # Fallback : parfois l'attribut peut contenir des espaces parasites
+            if not hits:
+                candidates = xml_root.xpath(
+                    ".//*[translate(local-name(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='layout']"
+                )
+                for c in candidates:
+                    nm = (c.get("name") or c.get("title") or "").strip()
+                    if nm == (layout_name or "").strip():
+                        hits = [c]
+                        break
+
+            if not hits:
+                # Diagnostic léger : liste des noms trouvés (max 20)
+                try:
+                    names = []
+                    for c in xml_root.xpath(
+                        ".//*[translate(local-name(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='layout']"
+                    ):
+                        nm = (c.get("name") or c.get("title") or "").strip()
+                        if nm:
+                            names.append(nm)
+                    names = sorted(set(names))
+                    hint = ""
+                    if names:
+                        hint = "\nNoms détectés (extrait) :\n- " + "\n- ".join(names[:20])
+                        if len(names) > 20:
+                            hint += f"\n… +{len(names)-20} autres"
+                    return False, f"Mise en page introuvable dans le XML : {layout_name}{hint}"
+                except Exception:
+                    return False, f"Mise en page introuvable dans le XML : {layout_name}"
+
+            layout_elem = copy.deepcopy(hits[0])
+
+            # Le format .qpt correspond à l'élément racine <Layout> (cf. QgsLayout::saveAsTemplate)
+            xml_bytes = etree.tostring(
+                layout_elem,
+                encoding="UTF-8",
+                xml_declaration=True,
+                pretty_print=True
+            )
+
+            if not out_path.lower().endswith(".qpt"):
+                out_path += ".qpt"
+
+            with open(out_path, "wb") as f:
+                f.write(xml_bytes)
+
+            return True, ""
+        except Exception as e:
+            return False, str(e)
 
     def _clear_ui_and_state(self):
         """Remet l'UI et l'état interne à zéro."""
@@ -1658,6 +1741,9 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         if hasattr(self, "current_project_path"): self.current_project_path = ""
         if hasattr(self, "loaded"):             self.loaded = False
 
+        # Cache XML du projet externe
+        self._external_xml_root = None
+
         # 4) Nettoyer les widgets d’info (chemin, labels, boutons, etc.)
         # adapte selon ton UI
         for attr in ("projectPathLineEdit", "projectLineEdit"):
@@ -1682,14 +1768,6 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             self._clear_ui_and_state()
         finally:
             super().closeEvent(event)
-
-    def showEvent(self, event):
-        """À chaque affichage de la fenêtre, on remet la case à décoché."""
-        try:
-            if hasattr(self, "chk_disconnect_local"):
-                self.chk_disconnect_local.setChecked(False)
-        finally:
-            super().showEvent(event)
 
     def reject(self):
         """Si on ferme via Échap / bouton Annuler."""
