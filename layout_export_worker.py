@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import traceback
+import glob
 
 
 def _as_int(x, default=0):
@@ -22,6 +23,80 @@ def _as_int(x, default=0):
         return int(x)
     except Exception:
         return default
+
+
+def _prepare_qgis_env(prefix: str):
+    """Configure un environnement QGIS minimal *avant* import PyQGIS.
+
+    Objectif : rendre le sous-process aussi proche que possible de l'environnement
+    de l'instance QGIS principale (PROJ/GDAL inclus), afin d'éviter :
+    - CRS 'not found' (PROJ DB non trouvée)
+    - erreurs GDAL (GDAL_DATA non trouvé)
+    """
+    if not prefix:
+        return
+
+    os.environ.setdefault("QGIS_PREFIX_PATH", prefix)
+
+    # prefix est souvent .../apps/qgis -> root = ...
+    root = os.path.abspath(os.path.join(prefix, os.pardir, os.pardir))
+    bin_dir = os.path.join(root, "bin")
+    share_dir = os.path.join(root, "share")
+
+    # PATH / DLLs
+    if os.path.isdir(bin_dir):
+        os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+        if os.name == "nt" and hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(bin_dir)
+            except Exception:
+                pass
+
+    # PROJ / GDAL data (important pour les CRS EPSG et la lecture raster)
+    proj_dir = os.path.join(share_dir, "proj")
+    gdal_dir = os.path.join(share_dir, "gdal")
+
+    if os.path.isdir(proj_dir):
+        # PROJ 9+ préfère PROJ_DATA, mais on pose aussi PROJ_LIB pour compat.
+        os.environ.setdefault("PROJ_DATA", proj_dir)
+        os.environ.setdefault("PROJ_LIB", proj_dir)
+
+    if os.path.isdir(gdal_dir):
+        os.environ.setdefault("GDAL_DATA", gdal_dir)
+
+    # Chemin Python de QGIS : <prefix>/python
+    py_path = os.path.join(prefix, "python")
+    if os.path.isdir(py_path) and py_path not in sys.path:
+        sys.path.insert(0, py_path)
+
+
+def _safe_unlink(path: str):
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
+def _prepare_output_path(out_path: str, fmt: str):
+    """Évite les erreurs GDAL 'update access' en supprimant les sorties existantes.
+
+    QGIS peut parfois (selon les options d'export / drivers) tenter une ouverture en
+    mode update si un fichier cible existe déjà.
+    """
+    if not out_path:
+        return
+
+    # Suppression du fichier cible
+    _safe_unlink(out_path)
+
+    # En PNG multipages, QGIS génère automatiquement *_1.png, *_2.png, etc.
+    if fmt == "png":
+        base, ext = os.path.splitext(out_path)
+        if ext.lower() != ".png":
+            return
+        for p in glob.glob(base + "_*.png"):
+            _safe_unlink(p)
 
 
 def main():
@@ -43,8 +118,11 @@ def main():
     dpi = _as_int(cfg.get("dpi"), 300)
     items = cfg.get("items") or []
 
-    # Import PyQGIS *après* avoir éventuellement ajusté le prefix
-    from qgis.core import QgsApplication, QgsProject, QgsLayoutExporter
+    # Prépare l'environnement AVANT d'importer PyQGIS.
+    _prepare_qgis_env(prefix)
+
+    # Import PyQGIS
+    from qgis.core import QgsApplication, QgsProject, QgsLayoutExporter, Qgis
 
     if prefix:
         QgsApplication.setPrefixPath(prefix, True)
@@ -58,8 +136,16 @@ def main():
 
         proj = QgsProject()
 
-        # Lecture du projet
-        ok = proj.read(project_path)
+        # Flags de lecture pour accélérer un peu (sans casser le rendu des layouts)
+        # - TrustLayerMetadata / DontStoreOriginalStyles / DontLoadProjectStyles / DontLoad3DViews
+        flags = (
+            Qgis.ProjectReadFlag.TrustLayerMetadata
+            | Qgis.ProjectReadFlag.DontStoreOriginalStyles
+            | Qgis.ProjectReadFlag.DontLoadProjectStyles
+            | Qgis.ProjectReadFlag.DontLoad3DViews
+        )
+
+        ok = proj.read(project_path, flags)
         if not ok:
             raise RuntimeError("QgsProject.read() failed")
 
@@ -83,6 +169,9 @@ def main():
 
             exporter = QgsLayoutExporter(layout)
 
+            # Si le fichier existe déjà, on le supprime (évite certains cas où GDAL tente un update)
+            _prepare_output_path(out_path, fmt)
+
             if fmt == "pdf":
                 ps = QgsLayoutExporter.PdfExportSettings()
                 # Pour les projets lourds, la sortie vectorielle peut être coûteuse.
@@ -94,12 +183,29 @@ def main():
                 if hasattr(ps, "dpi"):
                     ps.dpi = dpi
 
+                # Désactive la géoréférence (et les métadonnées) :
+                # - évite des erreurs PROJ/GDAL quand un CRS est exotique/incorrect
+                # - généralement souhaité pour des figures (PDF de publication)
+                if hasattr(ps, "appendGeoreference"):
+                    ps.appendGeoreference = False
+                if hasattr(ps, "exportMetadata"):
+                    ps.exportMetadata = False
+                if hasattr(ps, "writeGeoPdf"):
+                    ps.writeGeoPdf = False
+
                 code = exporter.exportToPdf(out_path, ps)
 
             elif fmt == "png":
                 iset = QgsLayoutExporter.ImageExportSettings()
                 if hasattr(iset, "dpi"):
                     iset.dpi = dpi
+
+                # Export PNG : figure simple → pas de worldfile ni de métadonnées.
+                if hasattr(iset, "generateWorldFile"):
+                    iset.generateWorldFile = False
+                if hasattr(iset, "exportMetadata"):
+                    iset.exportMetadata = False
+
                 # Si plusieurs pages, QGIS nommera automatiquement fichier_1.png, fichier_2.png, etc.
                 code = exporter.exportToImage(out_path, iset)
 

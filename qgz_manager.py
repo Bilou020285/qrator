@@ -1,11 +1,53 @@
 # qrator/qgz_manager.py
 import os
 import tempfile
+import shutil
 import zipfile
 import copy
+import sqlite3
 from typing import Dict, Set, DefaultDict, Tuple, Iterable
 from collections import defaultdict
 from lxml import etree
+
+
+def _prune_aux_qgd_inplace(qgd_path: str, kept_layer_ids: Set[str]) -> bool:
+    """Nettoie un fichier .qgd (Auxiliary Storage) en ne conservant que les tables
+    correspondant aux couches retenues.
+
+    D'après l'implémentation QGIS, les tables auxiliaires portent le nom *exact*
+    de l'id de couche (layer.id()), et contiennent un champ clé "ASPK".
+    Donc on peut supprimer en sécurité toute table qui a un champ ASPK mais dont
+    le nom n'est pas dans kept_layer_ids.
+    """
+    try:
+        if not qgd_path or not os.path.exists(qgd_path):
+            return False
+
+        conn = sqlite3.connect(qgd_path)
+        cur = conn.cursor()
+
+        tables = [r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        for t in tables:
+            # PRAGMA ne supporte pas la paramétrisation -> on quote soigneusement
+            t_quoted = '"' + t.replace('"', '""') + '"'
+            try:
+                cols = [row[1] for row in cur.execute(f"PRAGMA table_info({t_quoted})").fetchall()]
+            except Exception:
+                continue
+
+            # Table auxiliaire ? (présence de ASPK)
+            if "ASPK" in cols and t not in kept_layer_ids:
+                try:
+                    cur.execute(f"DROP TABLE IF EXISTS {t_quoted}")
+                except Exception:
+                    pass
+
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[QRator] Warning: could not prune auxiliary storage (.qgd): {e}")
+        return False
 
 # =========================
 # Helpers XML (namespace-agnostiques)
@@ -61,19 +103,35 @@ def _all(elem: etree._Element, xp: str) -> Iterable[etree._Element]:
 # =========================
 
 def open_project(file_path: str):
-    """Ouvre un projet QGIS (.qgs ou .qgz) et renvoie (xml_root, meta)."""
+    """Ouvre un projet QGIS (.qgs ou .qgz) et renvoie (xml_root, meta).
+
+    meta contient au minimum :
+      - source_path : chemin du projet source
+      - is_qgz      : bool indiquant si le projet source est un .qgz
+      - qgd_path    : (si source .qgs) chemin vers le .qgd associé, s'il existe
+      - qgs_name    : (si source .qgz) nom du .qgs trouvé dans l'archive
+    """
+    meta = {"source_path": file_path, "is_qgz": file_path.endswith(".qgz")}
+
     if file_path.endswith(".qgz"):
         with zipfile.ZipFile(file_path, "r") as qgz:
-            qgs_name = next((n for n in qgz.namelist() if n.endswith(".qgs")), None)
+            qgs_name = next((n for n in qgz.namelist() if n.lower().endswith(".qgs")), None)
             if not qgs_name:
                 raise FileNotFoundError("No .qgs in .qgz")
+            meta["qgs_name"] = qgs_name
             with qgz.open(qgs_name) as qgs:
                 xml_bytes = qgs.read()
     else:
         with open(file_path, "rb") as f:
             xml_bytes = f.read()
+
+        # Si un .qgd existe à côté du .qgs, mémorise-le (il pourra être embarqué dans le .qgz de sortie)
+        qgd_path = os.path.splitext(file_path)[0] + ".qgd"
+        if os.path.exists(qgd_path):
+            meta["qgd_path"] = qgd_path
+
     root = etree.fromstring(xml_bytes)
-    return root, {}
+    return root, meta
 
 # =========================
 # Collecte & parsing d'identifiants
@@ -432,13 +490,19 @@ def _filter_relations(xml_root: etree._Element,
 # Sauvegarde
 # =========================
 
-def save_new_project(output_path: str, xml_root: etree._Element, selected: Dict) -> bool:
+def save_new_project(output_path: str, xml_root: etree._Element, selected: Dict, meta: Dict = None) -> bool:
     """
     Écrit un .qgz filtré selon selected.
     Écrit aussi un fichier *_DEBUG.qgs pour inspection manuelle.
+
+    IMPORTANT : conserve, quand c'est possible, les fichiers auxiliaires du projet source (notamment la base .qgd
+    d'Auxiliary Storage). Ceci permet de préserver, par exemple, les positions de labels stockées "dans le projet".
     """
     try:
         filtered = filter_project_xml(xml_root, selected)
+
+        # Identifiants de couches conservées (utile pour nettoyer la .qgd)
+        kept_layer_ids = _collect_known_layer_ids(filtered)
 
         # DEBUG : écrire le XML filtré à côté
         try:
@@ -456,6 +520,77 @@ def save_new_project(output_path: str, xml_root: etree._Element, selected: Dict)
 
         with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(tmp_qgs, arcname="project.qgs")
+
+            # ------------------------------------------------------------
+            # Conserver les fichiers auxiliaires du projet source (qgd, styles db, etc.)
+            # ------------------------------------------------------------
+            meta = meta or {}
+            src_path = meta.get("source_path")
+            if src_path:
+                if meta.get("is_qgz") and os.path.exists(src_path):
+                    # Source .qgz : recopier tout ce qui n'est PAS le .qgs
+                    try:
+                        with zipfile.ZipFile(src_path, "r") as srczip:
+                            for name in srczip.namelist():
+                                if name.endswith("/"):
+                                    continue
+                                if name.lower().endswith(".qgs"):
+                                    continue
+
+                                # Normaliser le nom du .qgd dans le qgz de sortie (association avec project.qgs)
+                                is_qgd = name.lower().endswith(".qgd")
+                                out_name = "project.qgd" if is_qgd else name
+
+                                # Evite collisions
+                                if out_name in zipf.namelist():
+                                    continue
+
+                                if is_qgd:
+                                    # --- Cas .qgd : on copie dans un fichier temporaire, on prune, puis on embarque ---
+                                    with tempfile.NamedTemporaryFile(suffix=".qgd", delete=False) as tqgd:
+                                        tmp_qgd = tqgd.name
+                                    try:
+                                        # extraction streaming -> fichier
+                                        with srczip.open(name, "r") as rf, open(tmp_qgd, "wb") as wf:
+                                            shutil.copyfileobj(rf, wf, length=1024 * 1024)
+
+                                        # nettoyage : on ne garde que les tables des couches retenues
+                                        _prune_aux_qgd_inplace(tmp_qgd, kept_layer_ids)
+
+                                        zipf.write(tmp_qgd, arcname=out_name)
+                                    finally:
+                                        try:
+                                            os.remove(tmp_qgd)
+                                        except Exception:
+                                            pass
+                                else:
+                                    # Copie en streaming (évite de charger tout le fichier en RAM)
+                                    with srczip.open(name, "r") as rf:
+                                        with zipf.open(out_name, "w") as wf:
+                                            shutil.copyfileobj(rf, wf, length=1024 * 1024)
+
+                    except Exception as e:
+                        print(f"[QRator] Warning: could not copy auxiliary files from source QGZ: {e}")
+
+                else:
+                    # Source .qgs : si un .qgd existe à côté, on l'embarque
+                    qgd_path = meta.get("qgd_path")
+                    if qgd_path and os.path.exists(qgd_path):
+                        try:
+                            # Prune d'abord dans une copie temp pour ne pas toucher au fichier source
+                            with tempfile.NamedTemporaryFile(suffix=".qgd", delete=False) as tqgd:
+                                tmp_qgd = tqgd.name
+                            try:
+                                shutil.copy2(qgd_path, tmp_qgd)
+                                _prune_aux_qgd_inplace(tmp_qgd, kept_layer_ids)
+                                zipf.write(tmp_qgd, arcname="project.qgd")
+                            finally:
+                                try:
+                                    os.remove(tmp_qgd)
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            print(f"[QRator] Warning: could not embed .qgd into output QGZ: {e}")
 
         os.unlink(tmp_qgs)
         print(f"[QRator] Saved filtered project to {output_path}")

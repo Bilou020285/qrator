@@ -11,10 +11,10 @@ about=Ce plugin permet d'accéder au contenu d'un projet QGIS sans l'ouvrir. Il 
 tracker=https://github.com/Bilou020285/qrator/issues
 repository=https://github.com/Bilou020285/qrator
 
-# changelog=Version : Amélioration de l'export des mises en page (pdf, png et qpt) pour éviter le plantage de QGIS si le projet est trop lourd
+# changelog=Version : Meilleure gestion des exports depuis l'onglet mises en page et inclusion du fichier .qpd de stockage auxiliaire dans le projet en sortie de QRator
 
 tags=python, QGIS, plugin, project management, project analysis, layers, styles, themes, layouts, relations, HTML report, filtered project, subproject, GIS
-version=1.0.2
+version=1.5
 license=GPL-2.0-or-later
 
 homepage=https://github.com/Bilou020285/qrator

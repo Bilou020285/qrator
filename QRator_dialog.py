@@ -543,7 +543,7 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             return
         try:
             self.update_status("Refreshing analysis...")
-            xml_root, _ = open_project(self.current_project_path)
+            xml_root, meta = open_project(self.current_project_path)
             self._external_xml_root = xml_root
             self.analyze_project(xml_root)
             self.update_status("Analysis refreshed")
@@ -681,7 +681,7 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
 
             self.update_status("Generating report...")
 
-            xml_root, _ = open_project(self.current_project_path)
+            xml_root, meta = open_project(self.current_project_path)
             selected_elements = self.selection_manager.get_selected_elements()
 
             # Utilisation du générateur de rapport
@@ -821,7 +821,7 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             selected_elements = self.selection_manager.get_selected_elements()
             print("[QRator] Selected elements before export:", selected_elements)
 
-            xml_root, _ = open_project(self.current_project_path)
+            xml_root, meta = open_project(self.current_project_path)
 
             # Autoriser export si au moins 1 couche effective (via onglet Couches ou Thèmes)
             layers = set(selected_elements.get("layers", set()))
@@ -855,7 +855,7 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             print("[QRator] selections:", self.selection_manager.get_selected_elements())
             print("[QRator] will save to:", output_path)
 
-            success = save_new_project(output_path, xml_root, selected_elements)
+            success = save_new_project(output_path, xml_root, selected_elements, meta)
             if success:
                 self.update_status(f"Project saved to {output_path}")
                 QMessageBox.information(self, "Success", f"Project saved successfully: {output_path}")
@@ -1533,7 +1533,23 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             json.dump(cfg, tmp_cfg, ensure_ascii=False, indent=2)
             tmp_cfg.close()
 
-            cmd = [sys.executable, worker_path, tmp_cfg.name]
+            # IMPORTANT (Windows) : dans certains environnements QGIS, sys.executable peut pointer vers
+            # qgis-bin.exe/qgis.exe. Dans ce cas, lancer le worker ouvre une nouvelle instance de QGIS et
+            # nos arguments (json/py) sont interprétés comme des *sources de données*.
+            # -> On force la recherche d'un *vrai* interpréteur Python fourni avec QGIS.
+            py_exe = self._find_qgis_python_executable()
+            py_base = os.path.basename(py_exe or "").lower()
+            if py_base.startswith("qgis"):
+                py_exe = ""
+
+            if not py_exe or (os.path.isabs(py_exe) and not os.path.exists(py_exe)):
+                return False, (
+                    "Impossible de trouver l'interpréteur Python de QGIS pour l'export en sous-processus.\n"
+                    f"sys.executable = {sys.executable}\n"
+                    f"Candidat trouvé = {py_exe}"
+                )
+
+            cmd = [py_exe, worker_path, tmp_cfg.name]
             env = os.environ.copy()
             # Sur Linux, un QGIS "headless" peut demander ce flag.
             # Sur Windows/macOS, on évite de le forcer (plugin Qt "offscreen" pas toujours dispo).
@@ -1609,6 +1625,79 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                     os.remove(tmp_cfg.name)
             except Exception:
                 pass
+
+    def _find_qgis_python_executable(self) -> str:
+        """Trouve un *vrai* interpréteur Python pour lancer le worker d'export.
+
+        Sous Windows, il arrive que sys.executable pointe vers qgis-bin.exe/qgis.exe.
+        Dans ce cas, un subprocess ouvre une nouvelle instance de QGIS au lieu d'exécuter
+        un script Python.
+
+        On privilégie :
+        - sys.executable s'il ressemble déjà à python
+        - sinon, des chemins plausibles dans l'installation QGIS (à partir de QgsApplication.prefixPath)
+        """
+        try:
+            # Override possible (utile si l'installation QGIS est atypique)
+            override = (os.environ.get("QRATOR_PYTHON_EXE") or "").strip()
+            if override and os.path.exists(override):
+                return override
+
+            exe = (sys.executable or "").strip()
+            base = os.path.basename(exe).lower()
+            exe_is_qgis = base.startswith("qgis") and base.endswith(".exe")
+            if base.startswith("python") and (base.endswith(".exe") or base in ("python", "python3")):
+                return exe
+
+            prefix = (QgsApplication.prefixPath() or "").strip()  # souvent .../apps/qgis
+            cands = []
+
+            if prefix:
+                root = os.path.abspath(os.path.join(prefix, os.pardir, os.pardir))
+
+                # Standalone QGIS : python dans root/bin
+                cands.extend([
+                    os.path.join(root, "bin", "python3.exe"),
+                    os.path.join(root, "bin", "python.exe"),
+                    os.path.join(root, "bin", "python3"),
+                    os.path.join(root, "bin", "python"),
+                ])
+
+                # Python embarqué (varie selon versions)
+                for py_dir in ["Python312", "Python311", "Python310", "Python39", "Python38"]:
+                    cands.extend([
+                        os.path.join(root, "apps", py_dir, "python.exe"),
+                        os.path.join(root, "apps", py_dir, "python3.exe"),
+                        os.path.join(root, "apps", py_dir, "bin", "python.exe"),
+                        os.path.join(root, "apps", py_dir, "bin", "python3.exe"),
+                    ])
+
+                # Cas atypiques : python sous prefix
+                cands.extend([
+                    os.path.join(prefix, "bin", "python3.exe"),
+                    os.path.join(prefix, "bin", "python.exe"),
+                ])
+
+            # OSGeo4W
+            osgeo4w_root = (os.environ.get("OSGEO4W_ROOT") or os.environ.get("OSGeo4W_ROOT") or "").strip()
+            if osgeo4w_root:
+                cands.extend([
+                    os.path.join(osgeo4w_root, "bin", "python3.exe"),
+                    os.path.join(osgeo4w_root, "bin", "python.exe"),
+                ])
+
+            for p in cands:
+                if not p:
+                    continue
+                if os.path.exists(p):
+                    return p
+
+            # fallback : si sys.executable est QGIS, on renvoie vide (ça forcera un message d'erreur explicite)
+            if exe_is_qgis:
+                return ""
+            return exe
+        except Exception:
+            return (sys.executable or "").strip()
 
     # =========================
     # Export QPT (sans charger le projet QGIS)
