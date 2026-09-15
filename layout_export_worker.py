@@ -49,8 +49,8 @@ def _prepare_qgis_env(prefix: str):
         if os.name == "nt" and hasattr(os, "add_dll_directory"):
             try:
                 os.add_dll_directory(bin_dir)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[QRator] Could not add DLL directory '{bin_dir}': {e}")
 
     # PROJ / GDAL data (important pour les CRS EPSG et la lecture raster)
     proj_dir = os.path.join(share_dir, "proj")
@@ -74,8 +74,8 @@ def _safe_unlink(path: str):
     try:
         if path and os.path.exists(path):
             os.remove(path)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[QRator] Could not remove '{path}': {e}")
 
 
 def _prepare_output_path(out_path: str, fmt: str):
@@ -235,8 +235,8 @@ def main():
     finally:
         try:
             qgs.exitQgis()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[QRator] Error during QGIS shutdown: {e}")
 
 
 if __name__ == "__main__":

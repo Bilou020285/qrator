@@ -28,14 +28,14 @@ class QRator:
         # Nettoyage du menu
         try:
             self.iface.removePluginMenu("&QRator", self.action)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[QRator] Could not remove plugin menu entry: {e}")
         # Si une fenêtre existe, on la ferme et on oublie la ref
         if self.dialog is not None:
             try:
                 self.dialog.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[QRator] Could not close dialog on unload: {e}")
             self.dialog = None
 
     def run(self):
@@ -48,8 +48,8 @@ class QRator:
         if self.dialog is not None:
             try:
                 self.dialog.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[QRator] Could not close previous dialog: {e}")
             self.dialog = None
 
         # CRÉER TOUJOURS UNE NOUVELLE FENÊTRE

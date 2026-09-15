@@ -33,15 +33,16 @@ def _prune_aux_qgd_inplace(qgd_path: str, kept_layer_ids: Set[str]) -> bool:
             t_quoted = '"' + t.replace('"', '""') + '"'
             try:
                 cols = [row[1] for row in cur.execute(f"PRAGMA table_info({t_quoted})").fetchall()]
-            except Exception:
+            except Exception as e:
+                print(f"[QRator] Could not read columns of table '{t}' in .qgd: {e}")
                 continue
 
             # Table auxiliaire ? (présence de ASPK)
             if "ASPK" in cols and t not in kept_layer_ids:
                 try:
                     cur.execute(f"DROP TABLE IF EXISTS {t_quoted}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[QRator] Could not drop obsolete auxiliary table '{t}': {e}")
 
         conn.commit()
         conn.close()
@@ -796,8 +797,8 @@ def disconnect_local_layers_in_xml(xml_root: etree._Element):
 
         try:
             ml.addprevious(etree.Comment("QRator: datasource intentionally broken to force relinking"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[QRator] Could not add relinking comment on layer: {e}")
 # === /QRator: déconnexion ===
 
 # =========================
@@ -824,8 +825,8 @@ def _write_qgz_with_aux(xml_root: etree._Element, output_path: str, meta: Dict, 
             with open(dbg, "wb") as f:
                 f.write(etree.tostring(xml_root, pretty_print=True, encoding="utf-8"))
             print(f"[QRator] DEBUG written: {dbg}")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[QRator] Could not write DEBUG .qgs: {e}")
 
         # Emballer dans un .qgz
         with tempfile.NamedTemporaryFile(suffix=".qgs", delete=False) as tmp:
@@ -885,8 +886,8 @@ def _write_qgz_with_aux(xml_root: etree._Element, output_path: str, meta: Dict, 
                                     finally:
                                         try:
                                             os.remove(tmp_qgd)
-                                        except Exception:
-                                            pass
+                                        except Exception as e:
+                                            print(f"[QRator] Could not remove temp .qgd file: {e}")
                                 else:
                                     # Copie en streaming (évite de charger tout le fichier en RAM)
                                     with srczip.open(name, "r") as rf:
@@ -911,8 +912,8 @@ def _write_qgz_with_aux(xml_root: etree._Element, output_path: str, meta: Dict, 
                             finally:
                                 try:
                                     os.remove(tmp_qgd)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    print(f"[QRator] Could not remove temp .qgd file: {e}")
                         except Exception as e:
                             print(f"[QRator] Warning: could not embed .qgd into output QGZ: {e}")
 

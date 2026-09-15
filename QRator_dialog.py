@@ -21,7 +21,9 @@ import copy
 import sys
 import json
 import time
-import subprocess
+# subprocess is used only to launch layout_export_worker.py with a locally-resolved
+# Python interpreter (see _find_qgis_python_executable()), never via a shell.
+import subprocess  # nosec B404
 from lxml import etree
 
 class QRatorDialog(QDialog, Ui_QRatorDialog):
@@ -164,132 +166,64 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         finally:
             super().showEvent(event)
 
+    def _set_button_tooltip_and_icon(self, attr_name: str, tooltip: str, icon_name: str):
+        """Configure l'infobulle et l'icône d'un bouton s'il existe, sans faire planter le reste de l'UI
+        si le thème d'icônes de QGIS ne peut pas fournir l'icône demandée."""
+        btn = getattr(self, attr_name, None)
+        if btn is None:
+            return
+        btn.setToolTip(tooltip)
+        try:
+            btn.setIcon(QgsApplication.getThemeIcon(icon_name))
+        except Exception as e:
+            print(f"[QRator] Could not load icon '{icon_name}' for '{attr_name}': {e}")
+
     def _setup_tooltips(self):
         """Configure les infobulles et les icônes pour une meilleure expérience utilisateur."""
         try:
             # Boutons principaux
-            if hasattr(self, 'loadProjectButton'):
-                self.loadProjectButton.setToolTip("Open a QGIS project file (.qgs or .qgz)")
-                try:
-                    self.loadProjectButton.setIcon(QgsApplication.getThemeIcon("/mActionFileOpen.svg"))
-                except:
-                    pass  # Si l'icône ne peut pas être chargée, on continue sans
-
-            if hasattr(self, 'saveProjectButton'):
-                self.saveProjectButton.setToolTip("Save the filtered project as a new .qgz file")
-                try:
-                    self.saveProjectButton.setIcon(QgsApplication.getThemeIcon("/mActionFileSave.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'refreshButton'):
-                self.refreshButton.setToolTip("Refresh the project analysis")
-                try:
-                    self.refreshButton.setIcon(QgsApplication.getThemeIcon("/mActionRefresh.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'exportButton'):
-                self.exportButton.setToolTip("Generate an HTML report of the project")
-                try:
-                    self.exportButton.setIcon(QgsApplication.getThemeIcon("/mActionFilePrint.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'browseOutputButton'):
-                self.browseOutputButton.setToolTip("Browse output location")
-                try:
-                    self.browseOutputButton.setIcon(QgsApplication.getThemeIcon("/mActionFileOpen.svg"))
-                except:
-                    pass
+            self._set_button_tooltip_and_icon(
+                "loadProjectButton", "Open a QGIS project file (.qgs or .qgz)", "/mActionFileOpen.svg")
+            self._set_button_tooltip_and_icon(
+                "saveProjectButton", "Save the filtered project as a new .qgz file", "/mActionFileSave.svg")
+            self._set_button_tooltip_and_icon(
+                "refreshButton", "Refresh the project analysis", "/mActionRefresh.svg")
+            self._set_button_tooltip_and_icon(
+                "exportButton", "Generate an HTML report of the project", "/mActionFilePrint.svg")
+            self._set_button_tooltip_and_icon(
+                "browseOutputButton", "Browse output location", "/mActionFileOpen.svg")
 
             # Boutons de sélection pour les couches
-            if hasattr(self, 'selectAllLayersButton'):
-                self.selectAllLayersButton.setToolTip("Sélectionner toutes les couches et groupes")
-                try:
-                    self.selectAllLayersButton.setIcon(QgsApplication.getThemeIcon("/mActionSelectAll.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'deselectAllLayersButton'):
-                self.deselectAllLayersButton.setToolTip("Désélectionner toutes les couches et groupes")
-                try:
-                    self.deselectAllLayersButton.setIcon(QgsApplication.getThemeIcon("/mActionDeselectAll.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'invertLayerSelectionButton'):
-                self.invertLayerSelectionButton.setToolTip("Inverser la sélection des couches et groupes")
-                try:
-                    self.invertLayerSelectionButton.setIcon(QgsApplication.getThemeIcon("/mActionInvertSelection.svg"))
-                except:
-                    pass
+            self._set_button_tooltip_and_icon(
+                "selectAllLayersButton", "Sélectionner toutes les couches et groupes", "/mActionSelectAll.svg")
+            self._set_button_tooltip_and_icon(
+                "deselectAllLayersButton", "Désélectionner toutes les couches et groupes", "/mActionDeselectAll.svg")
+            self._set_button_tooltip_and_icon(
+                "invertLayerSelectionButton", "Inverser la sélection des couches et groupes", "/mActionInvertSelection.svg")
 
             # Boutons de sélection pour les thèmes
-            if hasattr(self, 'selectAllThemesButton'):
-                self.selectAllThemesButton.setToolTip("Sélectionner tous les thèmes")
-                try:
-                    self.selectAllThemesButton.setIcon(QgsApplication.getThemeIcon("/mActionSelectAll.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'deselectAllThemesButton'):
-                self.deselectAllThemesButton.setToolTip("Désélectionner tous les thèmes")
-                try:
-                    self.deselectAllThemesButton.setIcon(QgsApplication.getThemeIcon("/mActionDeselectAll.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'invertThemeSelectionButton'):
-                self.invertThemeSelectionButton.setToolTip("Inverser la sélection des thèmes")
-                try:
-                    self.invertThemeSelectionButton.setIcon(QgsApplication.getThemeIcon("/mActionInvertSelection.svg"))
-                except:
-                    pass
+            self._set_button_tooltip_and_icon(
+                "selectAllThemesButton", "Sélectionner tous les thèmes", "/mActionSelectAll.svg")
+            self._set_button_tooltip_and_icon(
+                "deselectAllThemesButton", "Désélectionner tous les thèmes", "/mActionDeselectAll.svg")
+            self._set_button_tooltip_and_icon(
+                "invertThemeSelectionButton", "Inverser la sélection des thèmes", "/mActionInvertSelection.svg")
 
             # Boutons de sélection pour les mises en page
-            if hasattr(self, 'selectAllLayoutsButton'):
-                self.selectAllLayoutsButton.setToolTip("Sélectionner toutes les mises en page")
-                try:
-                    self.selectAllLayoutsButton.setIcon(QgsApplication.getThemeIcon("/mActionSelectAll.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'deselectAllLayoutsButton'):
-                self.deselectAllLayoutsButton.setToolTip("Désélectionner toutes les mises en page")
-                try:
-                    self.deselectAllLayoutsButton.setIcon(QgsApplication.getThemeIcon("/mActionDeselectAll.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'invertLayoutSelectionButton'):
-                self.invertLayoutSelectionButton.setToolTip("Inverser la sélection des mises en page")
-                try:
-                    self.invertLayoutSelectionButton.setIcon(QgsApplication.getThemeIcon("/mActionInvertSelection.svg"))
-                except:
-                    pass     
+            self._set_button_tooltip_and_icon(
+                "selectAllLayoutsButton", "Sélectionner toutes les mises en page", "/mActionSelectAll.svg")
+            self._set_button_tooltip_and_icon(
+                "deselectAllLayoutsButton", "Désélectionner toutes les mises en page", "/mActionDeselectAll.svg")
+            self._set_button_tooltip_and_icon(
+                "invertLayoutSelectionButton", "Inverser la sélection des mises en page", "/mActionInvertSelection.svg")
 
             # Boutons de sélection pour les relations
-            if hasattr(self, 'selectAllRelationsButton'):
-                self.selectAllRelationsButton.setToolTip("Sélectionner toutes les relations")
-                try:
-                    self.selectAllRelationsButton.setIcon(QgsApplication.getThemeIcon("/mActionSelectAll.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'deselectAllRelationsButton'):
-                self.deselectAllRelationsButton.setToolTip("Désélectionner toutes les relations")
-                try:
-                    self.deselectAllRelationsButton.setIcon(QgsApplication.getThemeIcon("/mActionDeselectAll.svg"))
-                except:
-                    pass
-
-            if hasattr(self, 'invertRelationSelectionButton'):
-                self.invertRelationSelectionButton.setToolTip("Inverser la sélection des relations")
-                try:
-                    self.invertRelationSelectionButton.setIcon(QgsApplication.getThemeIcon("/mActionInvertSelection.svg"))
-                except:
-                    pass                              
+            self._set_button_tooltip_and_icon(
+                "selectAllRelationsButton", "Sélectionner toutes les relations", "/mActionSelectAll.svg")
+            self._set_button_tooltip_and_icon(
+                "deselectAllRelationsButton", "Désélectionner toutes les relations", "/mActionDeselectAll.svg")
+            self._set_button_tooltip_and_icon(
+                "invertRelationSelectionButton", "Inverser la sélection des relations", "/mActionInvertSelection.svg")
 
         except Exception as e:
             print(f"Erreur lors de la configuration des tooltips: {str(e)}")
@@ -708,8 +642,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         # 4) petit message de statut
         try:
             self.update_status("Project tree updated")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[QRator] Could not update status bar: {e}")
 
     def export_to_html(self):
         try:
@@ -877,14 +811,14 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                 try:
                     _theme, lid = tl.rsplit("_", 1)
                     effective_layers.add(lid)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[QRator] Could not parse theme_layer token '{tl}': {e}")
             for ts in theme_styles:
                 try:
                     _theme, lid, _sname = ts.rsplit("_", 2)
                     effective_layers.add(lid)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[QRator] Could not parse theme_style token '{ts}': {e}")
 
             if not effective_layers:
                 QMessageBox.warning(
@@ -1174,16 +1108,20 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                 res, msg = ok, ""
             success = (res is True) or (isinstance(res, int) and res == 0)
             if not success:
-                try: os.remove(tmp_path)
-                except: pass
+                try:
+                    os.remove(tmp_path)
+                except Exception as e:
+                    print(f"[QRator] Could not remove temp QML '{tmp_path}': {e}")
                 QMessageBox.critical(self, "QRator", f"Échec de l’export du style.\n{msg}")
                 return
 
             # Lit le QML → presse-papiers
             with open(tmp_path, "r", encoding="utf-8") as f:
                 qml_text = f.read()
-            try: os.remove(tmp_path)
-            except: pass
+            try:
+                os.remove(tmp_path)
+            except Exception as e:
+                print(f"[QRator] Could not remove temp QML '{tmp_path}': {e}")
 
             QGuiApplication.clipboard().setText(qml_text)
             QMessageBox.information(self, "QRator", "Style copié dans le presse-papiers ✅")
@@ -1244,8 +1182,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                                 "Type de géométrie incompatible (ex: ligne → polygone)."
                             )
                             return
-            except Exception:
-                pass  # si la géométrie n’est pas dispo, on tente quand même
+            except Exception as e:
+                print(f"[QRator] Could not compare geometry types, trying anyway: {e}")
 
             sm = src_layer.styleManager()
             src_styles = sm.styles()
@@ -1300,12 +1238,14 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             try:
                 if (not save_success) and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
                     save_success = True
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[QRator] Could not check fallback QML file '{tmp_path}': {e}")
 
             if not save_success:
-                try: os.remove(tmp_path)
-                except: pass
+                try:
+                    os.remove(tmp_path)
+                except Exception as e:
+                    print(f"[QRator] Could not remove temp QML '{tmp_path}': {e}")
                 QMessageBox.critical(
                     self, "QRator",
                     f"Échec d’export du style source (fallback QML).\n{msg if msg else ''}"
@@ -1313,8 +1253,10 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                 return
 
             loaded = target.loadNamedStyle(tmp_path)
-            try: os.remove(tmp_path)
-            except: pass
+            try:
+                os.remove(tmp_path)
+            except Exception as e:
+                print(f"[QRator] Could not remove temp QML '{tmp_path}': {e}")
 
             # Évalue le succès loadNamedStyle (bool|int|tuple ou int=0)
             if isinstance(loaded, tuple):
@@ -1333,8 +1275,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                         diag.append(f"dst_geom={getattr(target, 'geometryType', lambda: '?')()}")
                     diag.append(f"style='{target_style}'")
                     diag.append(f"src_styles={', '.join(src_styles)}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    diag.append(f"(diagnostic incomplet: {e})")
                 QMessageBox.critical(
                     self, "QRator",
                     "Échec d’application du style (fallback QML).\n"
@@ -1656,7 +1598,10 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             progress.setMinimumDuration(0)
             progress.show()
 
-            proc = subprocess.Popen(
+            # cmd is a fixed argv list: a locally-resolved Python interpreter
+            # (_find_qgis_python_executable), the plugin's own worker script (worker_path) and a
+            # temp config file created by this method; no shell=True, no user-controlled input.
+            proc = subprocess.Popen(  # nosec B603
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1670,8 +1615,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                 if progress.wasCanceled():
                     try:
                         proc.terminate()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[QRator] Could not terminate export worker process: {e}")
                     progress.close()
                     return False, "Export annulé."
                 time.sleep(0.1)
@@ -1687,7 +1632,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                     try:
                         payload = json.loads(line)
                         break
-                    except Exception:
+                    except Exception as e:
+                        print(f"[QRator] Skipping non-JSON worker output line: {e}")
                         continue
 
             if not payload:
@@ -1718,8 +1664,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             try:
                 if tmp_cfg and os.path.exists(tmp_cfg.name):
                     os.remove(tmp_cfg.name)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[QRator] Could not remove temp worker config file: {e}")
 
     def _find_qgis_python_executable(self) -> str:
         """Trouve un *vrai* interpréteur Python pour lancer le worker d'export.
@@ -1915,8 +1861,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         if hasattr(self, "selection_manager") and self.selection_manager:
             try:
                 self.selection_manager.reset()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[QRator] Could not reset selection manager: {e}")
 
         # 3) Effacer l’état “projet chargé”
         # adapte les attributs si tes noms diffèrent
@@ -1934,15 +1880,15 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             if hasattr(self, attr):
                 try:
                     getattr(self, attr).clear()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[QRator] Could not clear widget '{attr}': {e}")
 
         # 5) Vider proprement le cache de projet temporaire (styles)
         if getattr(self, "_style_tmp_project", None):
             try:
                 self._style_tmp_project.clear()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[QRator] Could not clear temp style project cache: {e}")
             self._style_tmp_project = None
             self._style_tmp_project_path = ""
 

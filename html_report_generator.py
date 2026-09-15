@@ -31,8 +31,8 @@ def _read_logo_data_uri():
             with open(logo_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode("ascii")
             return f"data:image/png;base64,{b64}"
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[QRator] Could not read logo for HTML report: {e}")
     return None
 
 def _text(el, default="Unknown"):

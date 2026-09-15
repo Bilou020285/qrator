@@ -69,8 +69,8 @@ def _collect_layers(xml_root):
         # DEBUG
         try:
             print(f"[QRator][parse_layers] layer '{lname}' ({lid}) -> styles: {styles}")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[QRator][parse_layers] debug print failed: {e}")
 
     return out
 
