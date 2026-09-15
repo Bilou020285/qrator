@@ -1,10 +1,11 @@
 from qgis.PyQt.QtWidgets import (QDialog, QMessageBox, QTreeWidgetItem, QFileDialog,
-                                QLabel, QHeaderView, QProgressDialog, QSizePolicy, QApplication)
+                                QLabel, QHeaderView, QProgressDialog, QSizePolicy, QApplication,
+                                QCheckBox)
 from qgis.PyQt.QtCore import Qt, QPoint
 from qgis.PyQt.QtGui import QFont
 from .ui.QRator_dialog import Ui_QRatorDialog
 from .selection_manager import SelectionManager
-from .qgz_manager import open_project, save_new_project
+from .qgz_manager import open_project, save_new_project, save_merged_project
 from .parse_layers import parse_layers
 from .parse_themes import parse_themes
 from .parse_layouts_relations import parse_layouts_relations
@@ -27,6 +28,10 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setupUi(self)
+
+        # === QRator: Checkbox "Déconnecter les sources locales" ===
+        self._init_disconnect_checkbox()
+        # === /QRator: Checkbox ===
 
         # Cache du XML du projet externe (évite de re-décompresser/re-parser un gros .qgz
         # et permet des exports "légers" comme les modèles .qpt)
@@ -120,6 +125,44 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
 
         #Détruit l'objet à la fermeture
         self.setAttribute(Qt.WA_DeleteOnClose, True)
+
+    def _init_disconnect_checkbox(self):
+        """Crée et insère la case juste au-dessus de la ligne 'Chemin du projet modifié (.qgz)...'."""
+        self.chk_disconnect_local = QCheckBox("Déconnecter les sources de données locales", self)
+        self.chk_disconnect_local.setToolTip(
+            "Si coché : les couches locales (SHP, GPKG/SpatiaLite, CSV, rasters, etc.) "
+            "seront volontairement 'cassées' dans le projet généré pour que QGIS propose "
+            "de les réadresser à l'ouverture. Les couches distantes (PostGIS, WMS/WFS/WMTS, "
+            "XYZ, ArcGIS, vectortiles, etc.) sont conservées."
+        )
+
+        # État par défaut : toujours décoché
+        self.chk_disconnect_local.setChecked(False)
+
+        # Insertion juste avant outputLayout dans mainLayout
+        try:
+            main = getattr(self, "mainLayout", None)
+            out_lay = getattr(self, "outputLayout", None)
+            if main is not None and out_lay is not None:
+                insert_idx = main.count()
+                for i in range(main.count()):
+                    item = main.itemAt(i)
+                    if item is not None and item.layout() is out_lay:
+                        insert_idx = i
+                        break
+                main.insertWidget(insert_idx, self.chk_disconnect_local)
+            else:
+                self.mainLayout.addWidget(self.chk_disconnect_local)
+        except Exception:
+            self.mainLayout.addWidget(self.chk_disconnect_local)
+
+    def showEvent(self, event):
+        """À chaque affichage de la fenêtre, on remet la case à décoché."""
+        try:
+            if hasattr(self, "chk_disconnect_local"):
+                self.chk_disconnect_local.setChecked(False)
+        finally:
+            super().showEvent(event)
 
     def _setup_tooltips(self):
         """Configure les infobulles et les icônes pour une meilleure expérience utilisateur."""
@@ -802,7 +845,8 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
         return html
 
     def export_project(self):
-        """Exporte le projet filtré en fonction des sélections dans tous les onglets."""
+        """Exporte le projet filtré en fonction des sélections dans tous les onglets,
+        ou fusionne avec un projet existant si le fichier de sortie existe déjà."""
         if not hasattr(self, 'modifiedPathLineEdit'):
             QMessageBox.warning(self, "Warning", "UI element missing: modifiedPathLineEdit")
             return
@@ -849,13 +893,64 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                 )
                 return
 
+            # Propager l'état de la case "Déconnecter les sources locales" au moteur d'export
+            try:
+                selected_elements["disconnect_local"] = bool(
+                    getattr(self, "chk_disconnect_local", None)
+                    and self.chk_disconnect_local.isChecked()
+                )
+            except Exception:
+                selected_elements["disconnect_local"] = False
+
             import inspect, qrator.qgz_manager as qm
-            
+
             print("[QRator] qgz_manager file:", inspect.getfile(qm))
             print("[QRator] selections:", self.selection_manager.get_selected_elements())
             print("[QRator] will save to:", output_path)
 
-            success = save_new_project(output_path, xml_root, selected_elements, meta)
+            # Si le fichier de sortie existe déjà, proposer d'écraser ou de fusionner
+            mode = "overwrite"
+            if os.path.exists(output_path):
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Question)
+                msg.setWindowTitle("Projet existant")
+                msg.setText(
+                    "Le fichier de projet indiqué existe déjà.\n\n"
+                    "Que souhaites-tu faire ?"
+                )
+                msg.setInformativeText(
+                    "• Écraser : remplace complètement le projet existant par le projet filtré.\n"
+                    "• Fusionner : complète le projet existant avec les éléments sélectionnés.\n"
+                    "• Annuler : abandonne l'export."
+                )
+                overwrite_btn = msg.addButton("Écraser", QMessageBox.YesRole)
+                merge_btn = msg.addButton("Fusionner", QMessageBox.NoRole)
+                cancel_btn = msg.addButton("Annuler", QMessageBox.RejectRole)
+                msg.setDefaultButton(overwrite_btn)
+                msg.exec_()
+
+                clicked = msg.clickedButton()
+                if clicked == cancel_btn:
+                    self.update_status("Export cancelled.")
+                    return
+                mode = "merge" if clicked == merge_btn else "overwrite"
+
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                if mode == "merge":
+                    # Fusionne les éléments sélectionnés du projet courant dans le
+                    # projet déjà existant à output_path (un backup est créé avant).
+                    success = save_merged_project(
+                        existing_project_path=output_path,
+                        xml_root_source=xml_root,
+                        selected=selected_elements,
+                        output_path=output_path,
+                    )
+                else:
+                    success = save_new_project(output_path, xml_root, selected_elements, meta)
+            finally:
+                QApplication.restoreOverrideCursor()
+
             if success:
                 self.update_status(f"Project saved to {output_path}")
                 QMessageBox.information(self, "Success", f"Project saved successfully: {output_path}")

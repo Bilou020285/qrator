@@ -33,7 +33,7 @@ La fenêtre principale comporte plusieurs sections :
 -   **Barre de boutons** (haut de la fenêtre)
     -   📂 *Open Project* : ouvrir un projet `.qgs` ou `.qgz`
     -   💾 *Save Filtered Project* : enregistrer un nouveau projet
-        filtré
+        filtré. Si le projet existe déjà, il est possible d'écraser le projet ou de fusionner les réglages de QRator avec le projet existant
     -   🔄 *Refresh* : relancer l'analyse
     -   📑 *Export HTML Report* : générer un rapport HTML interactif
     -   📂 *Browse Output* : définir le chemin de sauvegarde du projet
@@ -125,6 +125,12 @@ sélection).
     -   les autres sont supprimées du XML.
 -   Idéal pour partager un **sous-projet** à un collègue ou pour alléger
     un projet complexe.
+-   Si le fichier du projet existe déjà, QRator peut fusionner les paramètres du projet existant avec ceux sélectionnés dans le plugin
+
+### 3. Déconnection aux données locales
+
+La case à cocher **Déconnecter les sources de données locales** permet de générer un nouveau projet avec des sources différentes du projet d'origine.
+À l'ouverture du projet créé par QRator, QGIS signalera les sources de données manquantes qu'il suffira alors de réadresser.
 
 ------------------------------------------------------------------------
 
@@ -181,7 +187,7 @@ The main window contains several parts:
 
 -   **Toolbar buttons** (top of the window)
     -   📂 *Open Project* : open a `.qgs` or `.qgz` project
-    -   💾 *Save Filtered Project* : save a new filtered project
+    -   💾 *Save Filtered Project* : save a new filtered project or merge an existing project with selected settings in QRator
     -   🔄 *Refresh* : reload the project analysis
     -   📑 *Export HTML Report* : generate an interactive HTML report
     -   📂 *Browse Output* : choose where to save the filtered project
@@ -266,6 +272,12 @@ The main window contains several parts:
     -   all other elements are removed from the XML.
 -   Perfect for sharing a **subproject** with colleagues or lightening
     complex projects.
+-   If the project file already exists, QRator can merge the existing project settings with those selected in the plugin
+
+### 3. Disconnecting local data
+
+The **Disconnect local data sources** checkbox allows you to generate a new project with different sources from the original project.
+When you open the project created by QRator, QGIS will flag any missing data sources, which you can then simply re-address.
 
 ------------------------------------------------------------------------
 
