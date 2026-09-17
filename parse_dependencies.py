@@ -128,6 +128,6 @@ def parse_dependencies(xml_root, tree_widget, selection_manager=None, project_pa
 
     try:
         tree_widget.itemExpanded.disconnect()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[QRator] No previous itemExpanded connection to disconnect: {e}")
     tree_widget.itemExpanded.connect(_on_expanded)
