@@ -143,6 +143,25 @@ class SelectionManager:
     # ------------------------------------------------------------------
     # Divers utilitaires
     # ------------------------------------------------------------------
+    def check_items(self, type_identifier_pairs):
+        """
+        Coche, dans tous les arbres connectés, les items dont (item_type, identifier)
+        correspond à l'une des paires fournies. Utilisé par l'onglet Dépendances pour
+        pré-sélectionner, dans Couches/Thèmes/Mises en page, tout ce qu'une mise en page utilise.
+        Ne décoche jamais rien (comme _auto_check_relations_based_on_layers).
+        """
+        wanted = set(type_identifier_pairs)
+        if not wanted:
+            return
+        for tree in list(self.connected_widgets):
+            root = tree.invisibleRootItem()
+            for item in self._iter_items(root):
+                data = item.data(0, Qt.ItemDataRole.UserRole)
+                if not data or not isinstance(data, tuple) or len(data) != 2:
+                    continue
+                if data in wanted and item.checkState(0) != Qt.CheckState.Checked:
+                    item.setCheckState(0, Qt.CheckState.Checked)
+
     def clear_selection(self):
         """Décocher visuellement tout (optionnel)."""
         for tree in list(self.connected_widgets):

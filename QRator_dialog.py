@@ -9,6 +9,7 @@ from .qgz_manager import open_project, save_new_project, save_merged_project
 from .parse_layers import parse_layers
 from .parse_themes import parse_themes
 from .parse_layouts_relations import parse_layouts_relations
+from . import dependency_analyzer
 from .html_report_generator import HTMLReportGenerator  # Nouveau module
 import os
 import datetime
@@ -299,6 +300,79 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             self.deselectAllRelationsButton.clicked.connect(lambda: self._deselect_all_items(self.relationTree))
         if hasattr(self, 'invertRelationSelectionButton'):
             self.invertRelationSelectionButton.clicked.connect(lambda: self._invert_selection(self.relationTree))
+
+        # Bouton pour l'onglet Dépendances
+        if hasattr(self, 'selectDependenciesButton'):
+            self.selectDependenciesButton.clicked.connect(self._select_dependencies_for_current_layout)
+
+    def _select_dependencies_for_current_layout(self):
+        """Coche, dans Couches/Thèmes/Mises en page, tout ce qu'utilise la mise en page
+        actuellement sélectionnée dans l'onglet Dépendances."""
+        if not hasattr(self, 'dependencyTree') or not self.dependencyTree:
+            return
+
+        current = self.dependencyTree.currentItem()
+        while current is not None and current.parent() is not None:
+            current = current.parent()  # remonte jusqu'à l'item racine (nom de la mise en page)
+
+        if current is None:
+            QMessageBox.information(self, "QRator", "Sélectionne d'abord une mise en page dans l'onglet Dépendances.")
+            return
+
+        layout_name = current.text(0)
+        if not getattr(self, "current_project_path", None) or not os.path.exists(self.current_project_path):
+            QMessageBox.warning(self, "QRator", "Please open a valid QGIS project first.")
+            return
+
+        try:
+            xml_root, _meta = open_project(self.current_project_path)
+            result = dependency_analyzer.analyze_layout_dependencies(
+                xml_root, layout_name, project_path=self.current_project_path
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "QRator", f"Échec de l'analyse des dépendances : {e}")
+            return
+
+        # NOTE : les items "couche" (onglet Couches) et "thème"/"couche de thème" (onglet Thèmes)
+        # sont des items tri-state (Qt.ItemIsTristate) : les cocher directement cascade
+        # automatiquement sur TOUS leurs enfants (donc tous les styles de la couche, pas
+        # seulement celui utilisé par cette dépendance). On coche donc :
+        #   - le thème entier (cascade correcte : chaque thème ne liste QUE ses propres
+        #     couples couche+style, donc rien d'indésirable n'est entraîné) pour tout ce qui
+        #     est atteint via un thème ;
+        #   - uniquement l'item "couche" brut (onglet Couches, sans style précis) pour les
+        #     couches atteintes seulement via l'atlas, un tableau ou une jointure et qui
+        #     n'appartiennent à aucun des thèmes utilisés — on ne sait alors pas quel style
+        #     est pertinent, donc on garde volontairement tous ses styles.
+        pairs = set()
+        theme_covered_layer_ids = set()
+
+        for th in result["themes"]:
+            pairs.add(("themes", th["theme"]))
+            for ly in th["layers"]:
+                lid = ly.get("layer_id")
+                if lid:
+                    theme_covered_layer_ids.add(lid)
+
+        def _collect_plain_layers(node):
+            lid = node.get("layer_id")
+            if lid and not node.get("error") and lid not in theme_covered_layer_ids:
+                pairs.add(("layers", lid))
+            for j in node.get("joins", []):
+                _collect_plain_layers(j["target"])
+
+        if result["atlas"]:
+            _collect_plain_layers(result["atlas"]["layer"])
+        for th in result["themes"]:
+            for ly in th["layers"]:
+                for j in ly.get("joins", []):
+                    _collect_plain_layers(j["target"])
+        for tb in result["tables"]:
+            _collect_plain_layers(tb["layer"])
+        pairs.add(("layouts", layout_name))
+
+        self.selection_manager.check_items(pairs)
+        self.update_status(f"Dépendances de « {layout_name} » sélectionnées ({len(pairs)} éléments).")
 
     def _select_all_items(self, tree_widget):
         """Sélectionne tous les items d'un QTreeWidget"""
@@ -600,6 +674,7 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             ("themeTree",   "Themes"),
             ("layoutTree",  "Layouts"),
             ("relationTree","Relations"),
+            ("dependencyTree", "Dépendances"),
         ]
 
         # 2) reset visuel minimal
@@ -627,6 +702,7 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             from .parse_layers import parse_layers
             from .parse_themes import parse_themes
             from .parse_layouts_relations import parse_layouts, parse_relations
+            from .parse_dependencies import parse_dependencies
 
             if getattr(self, "layerTree", None):
                 parse_layers(xml_root, self.layerTree, self.selection_manager)
@@ -636,6 +712,11 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
                 parse_layouts(xml_root, self.layoutTree, self.selection_manager)
             if getattr(self, "relationTree", None):
                 parse_relations(xml_root, self.relationTree, self.selection_manager)
+            if getattr(self, "dependencyTree", None):
+                parse_dependencies(
+                    xml_root, self.dependencyTree, self.selection_manager,
+                    project_path=getattr(self, "current_project_path", None),
+                )
         except Exception as e:
             print("[QRator] fill_trees parse error:", e)
 
@@ -661,9 +742,26 @@ class QRatorDialog(QDialog, Ui_QRatorDialog):
             xml_root, meta = open_project(self.current_project_path)
             selected_elements = self.selection_manager.get_selected_elements()
 
-            # Utilisation du générateur de rapport
-            generator = HTMLReportGenerator(self.current_project_path, selected_elements, xml_root)
-            generator.generate_report(output_path)
+            layout_count = len({
+                (elem.get("name") or "").strip()
+                for elem in xml_root.iter()
+                if elem.tag.rsplit('}', 1)[-1].lower() == "layout" and (elem.get("name") or "").strip()
+            })
+            self.show_progress("Generating report… (analyse des dépendances par mise en page)",
+                                max_value=max(layout_count, 1))
+
+            def _on_dependencies_progress(i, total, layout_name):
+                self.update_progress(i)
+                self.update_status(f"Analyse des dépendances : {layout_name} ({i}/{total})")
+
+            try:
+                generator = HTMLReportGenerator(
+                    self.current_project_path, selected_elements, xml_root,
+                    progress_callback=_on_dependencies_progress,
+                )
+                generator.generate_report(output_path)
+            finally:
+                self.hide_progress()
 
             self.update_status(f"Report saved to {output_path}")
             QMessageBox.information(

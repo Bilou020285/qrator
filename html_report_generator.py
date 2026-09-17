@@ -42,11 +42,14 @@ def _strip_ns(tag):
     return tag.split('}')[-1] if tag else tag
 
 class HTMLReportGenerator:
-    def __init__(self, project_path, selected_elements, xml_root):
+    def __init__(self, project_path, selected_elements, xml_root, progress_callback=None):
         self.project_path = project_path
         self.selected = selected_elements or {}
         self.xml_root = xml_root
         self.layer_index = self._build_layer_index()  # by id
+        # Appelé (index, total, layout_name) pendant l'analyse des dépendances par mise en
+        # page, l'étape la plus longue sur un gros projet (introspection SQLite comprise).
+        self.progress_callback = progress_callback
 
     # ------------------------------------------------------------------ PUBLIC
     def generate_report(self, output_path):
@@ -327,6 +330,69 @@ class HTMLReportGenerator:
             })
         return out
 
+    # ---------------------------------------------- DEPENDENCIES (per layout, nested)
+    def _extract_dependencies(self):
+        """Pour chaque mise en page : thèmes utilisés, atlas, tableaux, et jointures
+        résolues récursivement (voir dependency_analyzer.py pour le détail/les limites)."""
+        from . import dependency_analyzer as da
+
+        def layer_node(node):
+            if node.get("error"):
+                return {"type": "dep_layer", "name": f"⚠ {node.get('layer_id')} (référence brisée)", "children": []}
+            label = node.get("layer_name") or node.get("layer_id")
+            if node.get("style"):
+                label += f"  [style: {node['style']}]"
+            children = []
+            if node.get("truncated"):
+                children.append({"type": "dep_info", "name": "… (déjà résolue plus haut)", "children": []})
+            else:
+                src_label = da.source_kind_label(node)
+                if src_label:
+                    children.append({"type": "dep_info", "name": src_label, "children": []})
+                for j in node.get("joins", []):
+                    jn = layer_node(j["target"])
+                    jn["name"] = f"Jointure ({j.get('field') or '?'}) → {jn['name']}"
+                    children.append(jn)
+            return {"type": "dep_layer", "name": label, "children": children}
+
+        layout_names = []
+        seen_names = set()
+        for elem in self.xml_root.iter():
+            if elem.tag.rsplit('}', 1)[-1].lower() != "layout":
+                continue
+            name = (elem.get("name") or "").strip()
+            if name and name not in seen_names:
+                seen_names.add(name)
+                layout_names.append(name)
+
+        out = []
+        total = len(layout_names)
+        for i, name in enumerate(layout_names, start=1):
+            if self.progress_callback:
+                try:
+                    self.progress_callback(i, total, name)
+                except Exception as e:
+                    print(f"[QRator] progress_callback error: {e}")
+            try:
+                result = da.analyze_layout_dependencies(self.xml_root, name, project_path=self.project_path)
+            except Exception as e:
+                print(f"[QRator] Could not analyze dependencies for layout '{name}': {e}")
+                continue
+
+            children = []
+            if result["atlas"]:
+                children.append({"type": "dep_group", "name": "Atlas (couverture)",
+                                  "children": [layer_node(result["atlas"]["layer"])]})
+            for th in result["themes"]:
+                children.append({"type": "dep_group", "name": f"Thème : {th['theme']}",
+                                  "children": [layer_node(ly) for ly in th["layers"]]})
+            for tb in result["tables"]:
+                kind = "Tableau attributaire" if tb["kind"] == "attribute_table" else (tb["kind"] or "Table")
+                children.append({"type": "dep_group", "name": kind, "children": [layer_node(tb["layer"])]})
+
+            out.append({"type": "dep_layout", "name": name, "children": children})
+        return out
+
     # --------------------------------------------------- RELATIONS (nested tree)
     def _extract_relations(self):
         out = []
@@ -396,6 +462,7 @@ class HTMLReportGenerator:
         themes_tree = self._extract_themes()
         layouts = self._extract_layouts()
         relations_tree = self._extract_relations()
+        dependencies_tree = self._extract_dependencies()
 
         # Counters
         def count_layers(nodes):
@@ -672,6 +739,34 @@ class HTMLReportGenerator:
             }
             return `<div class="tree"><ul>${nodes.map(renderNode).join('')}</ul></div>`;
           }
+
+          // -------- Dependencies (per layout, nested: layout > group > layer > join...)
+          function renderDependencies(nodes){
+            if(!nodes || !nodes.length) return "<div class='muted'>No layouts.</div>";
+            function renderNode(n){
+              const hasChildren = n.children && n.children.length;
+              if(!hasChildren){
+                return `
+                  <li>
+                    <div class="node">
+                      <i class="fa-regular fa-circle"></i>
+                      <span class="name">${n.name}</span>
+                    </div>
+                  </li>`;
+              }
+              return `
+                <li>
+                  <div class="node" onclick="toggleNode(this)">
+                    <span class="caret">▸</span>
+                    <span class="name">${n.name}</span>
+                  </div>
+                  <div style="display:none">
+                    <div class="tree"><ul>${n.children.map(renderNode).join('')}</ul></div>
+                  </div>
+                </li>`;
+            }
+            return `<div class="tree"><ul>${nodes.map(renderNode).join('')}</ul></div>`;
+          }
         </script>
         """
 
@@ -704,7 +799,8 @@ class HTMLReportGenerator:
       <a href="#layers">Layers</a> ·
       <a href="#themes">Themes</a> ·
       <a href="#layouts">Layouts</a> ·
-      <a href="#relations">Relations</a>
+      <a href="#relations">Relations</a> ·
+      <a href="#dependencies">Dependencies</a>
     </div>
 
     <!-- SUMMARY (no map inside) -->
@@ -771,6 +867,17 @@ class HTMLReportGenerator:
       </div>
       <div id="relations-tree"></div>
     </div>
+
+    <div id="dependencies" class="card">
+      <div class="section-head">
+        <h2><i class="fa-solid fa-sitemap"></i> Dependencies</h2>
+        <div class="section-actions">
+          <button class="btn" onclick="expandAll('dependencies-tree')"><i class="fa-solid fa-plus-square"></i> Expand all</button>
+          <button class="btn" onclick="collapseAll('dependencies-tree')"><i class="fa-regular fa-square-minus"></i> Collapse all</button>
+        </div>
+      </div>
+      <div id="dependencies-tree"></div>
+    </div>
   </div>
 
   <script>
@@ -788,12 +895,14 @@ class HTMLReportGenerator:
     const THEMES = {json.dumps(themes_tree, ensure_ascii=False)};
     const LAYOUTS = {json.dumps(layouts, ensure_ascii=False)};
     const RELATIONS = {json.dumps(relations_tree, ensure_ascii=False)};
+    const DEPENDENCIES = {json.dumps(dependencies_tree, ensure_ascii=False)};
 
     // Render
     document.getElementById('layers-tree').innerHTML = renderLayers(LAYERS);
     document.getElementById('themes-tree').innerHTML = renderThemes(THEMES);
     document.getElementById('layouts-list').innerHTML = renderLayouts(LAYOUTS);
     document.getElementById('relations-tree').innerHTML = renderRelations(RELATIONS);
+    document.getElementById('dependencies-tree').innerHTML = renderDependencies(DEPENDENCIES);
   </script>
 </body>
 </html>

@@ -104,6 +104,27 @@ dpi)**,
 
 ------------------------------------------------------------------------
 
+## Onglet **Dépendances**
+
+-   Pour chaque mise en page : remonte tout ce qu'elle utilise — thèmes
+    référencés par ses cartes (et les couches/styles de ces thèmes),
+    couche de couverture de l'atlas, tableaux attributaires placés dans
+    la mise en page — en suivant récursivement les jointures QGIS.
+-   Pour les couches SpatiaLite/GeoPackage dont la source est une requête
+    SQL ou une vue de la base, QRator tente de retrouver les tables
+    référencées (SQL déjà présent dans le projet, ou lecture du fichier
+    `.sqlite`/`.gpkg` en lecture seule s'il est accessible au chemin
+    enregistré — sinon, la couche est simplement signalée comme "non
+    résolue" plutôt que de bloquer l'analyse).
+-   Arbre **informatif** (non cochable) ; le bouton **"Sélectionner ces
+    dépendances"** coche, dans les onglets Couches/Thèmes/Mises en page,
+    tout ce que la mise en page sélectionnée utilise — prêt à exporter.
+-   ⚠️ Limité au SpatiaLite/GeoPackage local (pas de PostgreSQL/PostGIS) ;
+    extraction des tables référencées par expression régulière, pas un
+    vrai parseur SQL.
+
+------------------------------------------------------------------------
+
 ## Exports disponibles
 
 ### 1. Rapport HTML
@@ -111,7 +132,8 @@ dpi)**,
 -   Contient :
     -   Résumé (nombre de couches, thèmes, layouts, relations),
     -   Carte interactive (Leaflet) avec l'emprise du projet,
-    -   Arborescences interactives (couches, thèmes, relations),
+    -   Arborescences interactives (couches, thèmes, relations,
+        dépendances par mise en page),
     -   Informations détaillées (chemin des couches, CRS, etc.).
 
 🎨 Interface moderne et interactive (expand/collapse, icônes de
@@ -253,6 +275,26 @@ The main window contains several parts:
 
 ------------------------------------------------------------------------
 
+## **Dependencies** tab
+
+-   For each layout: traces everything it uses — themes referenced by
+    its maps (and the layers/styles of those themes), the atlas coverage
+    layer, attribute tables placed on the layout — following QGIS joins
+    recursively.
+-   For SpatiaLite/GeoPackage layers backed by a SQL query or a database
+    view, QRator tries to resolve the tables involved (SQL already
+    present in the project, or a read-only read of the `.sqlite`/`.gpkg`
+    file if reachable at its recorded path — otherwise the layer is
+    simply flagged "unresolved" rather than blocking the analysis).
+-   **Informational** tree (not checkable); the **"Select these
+    dependencies"** button checks, in the Layers/Themes/Layouts tabs,
+    everything the selected layout uses — ready to export.
+-   ⚠️ Limited to local SpatiaLite/GeoPackage (no PostgreSQL/PostGIS);
+    referenced tables are extracted with a regular expression, not a
+    real SQL parser.
+
+------------------------------------------------------------------------
+
 ## Export Options
 
 ### 1. HTML Report
@@ -260,7 +302,8 @@ The main window contains several parts:
 -   Contains:
     -   Summary (number of layers, themes, layouts, relations),
     -   Interactive map (Leaflet) showing the project extent,
-    -   Interactive trees (layers, themes, relations),
+    -   Interactive trees (layers, themes, relations, per-layout
+        dependencies),
     -   Detailed info (layer path, CRS, etc.).
 
 🎨 Modern interactive interface (expand/collapse, selection icons).
